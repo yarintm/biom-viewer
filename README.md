@@ -1,12 +1,20 @@
-# biom-viewer
+<p align="center">
+  <img src="docs/icon.png" width="112" alt="biom-viewer icon">
+</p>
+<h1 align="center">biom-viewer</h1>
+<p align="center"><strong>Instant, lazy-loading viewer for <code>.biom</code> files — never densifies the full sparse matrix.</strong></p>
 
-[![CI](https://github.com/yarintm/biom-viewer/actions/workflows/ci.yml/badge.svg)](https://github.com/yarintm/biom-viewer/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](pyproject.toml)
+<p align="center">
+  <a href="https://github.com/yarintm/biom-viewer/actions/workflows/ci.yml"><img src="https://github.com/yarintm/biom-viewer/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
+  <a href="pyproject.toml"><img src="https://img.shields.io/badge/python-3.9+-blue.svg" alt="Python 3.9+"></a>
+  <img src="https://img.shields.io/badge/platform-macOS-lightgrey.svg" alt="Platform: macOS">
+</p>
 
-A lightweight, double-clickable viewer for **`.biom`** (Biological Observation
-Matrix) files. Opens instantly, keeps its memory footprint tiny no matter how
-large the file is, and never runs a manual `biom convert` for you.
+A lightweight, double-clickable desktop viewer for **`.biom`** (Biological
+Observation Matrix) files. Opens instantly, keeps its memory footprint tiny
+no matter how large the file is, and never runs a manual `biom convert` for
+you.
 
 <p align="center">
   <img src="docs/screenshot-dark.jpg" width="80%" alt="biom-viewer, dark mode">
@@ -14,6 +22,26 @@ large the file is, and never runs a manual `biom convert` for you.
 <p align="center">
   <img src="docs/screenshot-light.jpg" width="80%" alt="biom-viewer, light mode">
 </p>
+
+**Contents:** [Features](#features) · [The problem](#the-problem) ·
+[How it avoids it](#how-it-avoids-all-three) · [Architecture](#architecture) ·
+[Install](#install) · [Usage](#usage) ·
+[macOS integration](#macos-double-click-integration) ·
+[Development](#development)
+
+## Features
+
+- **Never densifies the full table** — only the visible row/column window
+  is ever converted from sparse to dense, so a 500,000-column file opens
+  just as fast as a 5-column one
+- **Real native window**, not a browser tab — no server, no port, no
+  address bar (via [pywebview](https://pywebview.flowrl.com/))
+- **Auto-fitting grid** — rows/columns per page track your window size;
+  resize and it re-flows to fill the space exactly
+- **Click any row, column, or cell** to copy its full text to your
+  clipboard, with row/column highlighting
+- **Dark/light theme** and adjustable font size
+- **Double-click `.biom` files to open**, like any other document (macOS)
 
 ## The problem
 
@@ -59,18 +87,20 @@ below.
 ## Architecture
 
 ```
-┌─────────────────────┐  window.pywebview.api.meta()  ┌──────────────────────┐
-│                      │ ──────────────────────────▶  │                      │
-│  Native OS window    │  {rows, cols, row_ids,        │  Python              │
-│  (pywebview, system  │   col_ids, filename}          │                      │
-│  WebKit — vanilla    │                                │  TABLE = sparse      │
-│  JS, CSS Grid,       │  .data_window(r0,r1,c0,c1)    │  scipy matrix,       │
-│  no framework)       │ ──────────────────────────▶  │  loaded once via     │
-│  - paginated grid    │                                │  biom-format         │
-│  - auto-fits window  │  [[...]]                       │                      │
-│  - click = copy      │ ◀──────────────────────────  │                      │
-│  - theme + font size │  (only the visible window       └──────────────────────┘
-└─────────────────────┘   is ever densified)
+┌────────────────────────────┐                      ┌────────────────────────────┐
+│      Native OS window      │  api.meta()          │           Python            │
+│   (pywebview + WKWebView)  │ ───────────────────▶ │                              │
+│                             │  {rows, cols,         │  class Api:                  │
+│   vanilla JS + CSS Grid,   │   row_ids, col_ids}   │    def meta(): ...           │
+│   no framework              │ ◀─────────────────── │    def data_window(...): ... │
+│                             │                       │                              │
+│   - paginated grid          │  api.data_window(     │  TABLE = sparse scipy matrix │
+│   - auto-fits window        │    r0, r1, c0, c1)    │  (loaded once via            │
+│   - click cell = copy       │ ───────────────────▶ │   biom-format, never          │
+│   - theme + font size       │  [[...]]              │   densified in full)         │
+│                             │ ◀─────────────────── │                              │
+└────────────────────────────┘                      └────────────────────────────┘
+        window.pywebview.api.*  — direct JS↔Python bridge, no HTTP, no port
 ```
 
 No HTTP server, no port, no browser tab — the frontend calls Python
