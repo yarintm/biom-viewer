@@ -35,3 +35,6 @@ biom-viewer = "biom_viewer.app:main"
 
 [tool.setuptools.packages.find]
 include = ["biom_viewer*"]
+
+[tool.setuptools.package-data]
+biom_viewer = ["icon.png"]

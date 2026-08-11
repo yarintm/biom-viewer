@@ -276,6 +276,26 @@ window.addEventListener('pywebviewready', loadMeta);
 """
 
 
+def _set_dock_icon():
+    # pywebview's `webview.start(icon=...)` param is GTK/QT only (per its own
+    # docstring) and even its Cocoa code path applies too late to affect the
+    # already-created main window. Set the Dock icon ourselves instead —
+    # NSApplication.sharedApplication() returns the same singleton pywebview's
+    # Cocoa backend already created, so this just overrides its icon in place.
+    if sys.platform != "darwin":
+        return
+    icon_path = os.path.join(os.path.dirname(__file__), "icon.png")
+    if not os.path.isfile(icon_path):
+        return
+    try:
+        from AppKit import NSApplication, NSImage
+
+        image = NSImage.alloc().initByReferencingFile_(icon_path)
+        NSApplication.sharedApplication().setApplicationIconImage_(image)
+    except ImportError:
+        pass
+
+
 def main():
     global TABLE, FILENAME
     if len(sys.argv) < 2:
@@ -287,6 +307,7 @@ def main():
 
     title = f"BIOM Viewer — {os.path.basename(path)}"
     webview.create_window(title, html=PAGE, js_api=Api(), width=1280, height=820, min_size=(600, 400))
+    _set_dock_icon()
     webview.start()
 
 

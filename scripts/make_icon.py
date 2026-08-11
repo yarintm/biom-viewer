@@ -27,5 +27,5 @@ for r in range(rows):
         color = CELL_FILLED if (r, c) in filled else CELL_EMPTY
         draw.rounded_rectangle([x0, y0, x0 + cell, y0 + cell], radius=cell // 6, fill=color)
 
-img.save("icon.png")
+img.save("../biom_viewer/icon.png")
 print("wrote icon.png")
