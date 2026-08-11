@@ -20,6 +20,7 @@ classifiers = [
 ]
 dependencies = [
   "biom-format>=2.1",
+  "pywebview>=4.0",
 ]
 
 [project.optional-dependencies]

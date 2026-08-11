@@ -59,25 +59,28 @@ below.
 ## Architecture
 
 ```
-┌─────────────────────┐   GET /api/meta            ┌──────────────────────┐
-│                      │ ──────────────────────────▶│                      │
-│   Browser (vanilla   │   {rows, cols, row_ids,     │  Python stdlib       │
-│   JS, CSS Grid,      │    col_ids, filename}       │  http.server         │
-│   no framework)      │                             │                      │
-│                      │   GET /api/data?r0&r1&c0&c1 │  TABLE = sparse      │
-│  - paginated grid    │ ──────────────────────────▶ │  scipy matrix,       │
-│  - auto-fits window  │                             │  loaded once via     │
-│  - click = copy       │   {data: [[...]]}          │  biom-format         │
-│  - theme + font size │ ◀────────────────────────── │                      │
-└──────────────────────┘  (only the visible window   └──────────────────────┘
-                            is ever densified)
+┌─────────────────────┐  window.pywebview.api.meta()  ┌──────────────────────┐
+│                      │ ──────────────────────────▶  │                      │
+│  Native OS window    │  {rows, cols, row_ids,        │  Python              │
+│  (pywebview, system  │   col_ids, filename}          │                      │
+│  WebKit — vanilla    │                                │  TABLE = sparse      │
+│  JS, CSS Grid,       │  .data_window(r0,r1,c0,c1)    │  scipy matrix,       │
+│  no framework)       │ ──────────────────────────▶  │  loaded once via     │
+│  - paginated grid    │                                │  biom-format         │
+│  - auto-fits window  │  [[...]]                       │                      │
+│  - click = copy      │ ◀──────────────────────────  │                      │
+│  - theme + font size │  (only the visible window       └──────────────────────┘
+└─────────────────────┘   is ever densified)
 ```
 
-No FastAPI, no React, no build step. The whole app is one Python file
-(`biom_viewer/app.py`): the backend is `http.server.ThreadingHTTPServer`,
-and the HTML/CSS/JS for the grid is a string it serves directly. The only
-non-stdlib dependency is `biom-format` itself, because there's no stdlib
-equivalent for parsing HDF5 BIOM tables.
+No HTTP server, no port, no browser tab — the frontend calls Python
+functions directly through pywebview's JS↔Python bridge (`js_api`), and
+those calls never leave the process. The whole app is one Python file
+(`biom_viewer/app.py`): a small `Api` class exposes `meta()` and
+`data_window()`, and the HTML/CSS/JS for the grid is a string handed to
+`webview.create_window()`. Two dependencies: `biom-format` (no stdlib
+equivalent for parsing HDF5 BIOM tables) and `pywebview` (wraps the OS's
+native webview — WKWebView on macOS — so there's no bundled Chromium).
 
 ## Install
 
@@ -93,8 +96,8 @@ pip install -e .
 biom-viewer path/to/table.biom
 ```
 
-Opens your default browser pointed at a local server (`127.0.0.1`, random
-free port). Ctrl-C in the terminal stops it.
+Opens a native window (not a browser tab — no address bar, no server, no
+port). Closing the window ends the process.
 
 ### Controls
 
@@ -118,7 +121,7 @@ pip install -e .                    # or: pip install biom-viewer
 
 Then: right-click any `.biom` file → **Get Info** → **Open with** →
 **BiomViewer** → **Change All…**. From then on, double-clicking a `.biom`
-file launches the viewer and opens it in your browser automatically.
+file opens it directly in its own window.
 
 The generated app is a thin AppleScript wrapper that calls whatever
 `biom-viewer` is on your `PATH` at install time — no hardcoded paths, so it

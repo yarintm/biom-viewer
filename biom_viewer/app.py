@@ -1,13 +1,10 @@
 #!/usr/bin/env python3
-"""Lazy-loading BIOM viewer: stdlib HTTP server + biom-format, sparse-window slicing, canvas grid UI."""
-import json
+"""Lazy-loading BIOM viewer: native window (pywebview) + biom-format, sparse-window slicing, canvas grid UI."""
+import os
 import sys
-import threading
-import webbrowser
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse, parse_qs
 
 import biom
+import webview
 
 TABLE = None
 FILENAME = ""
@@ -32,6 +29,16 @@ def data_window(r0, r1, c0, c1):
     # Densify only the requested window, never the full matrix.
     sub = TABLE.matrix_data[r0:r1, :].tocsc()[:, c0:c1]
     return sub.toarray().tolist()
+
+
+class Api:
+    """Exposed to the frontend as window.pywebview.api.* — no HTTP server involved."""
+
+    def meta(self):
+        return meta()
+
+    def data_window(self, r0, r1, c0, c1):
+        return data_window(r0, r1, c0, c1)
 
 
 PAGE = """<!doctype html>
@@ -132,7 +139,7 @@ function computeFit(){
 }
 
 async function loadMeta(){
-  const r = await fetch('/api/meta'); meta = await r.json();
+  meta = await window.pywebview.api.meta();
   document.getElementById('filename').textContent =
     `${meta.filename}  —  ${meta.rows} rows x ${meta.cols} cols`;
   render();
@@ -154,8 +161,7 @@ async function render(){
   document.getElementById('colPrev').disabled = colPage===0;
   document.getElementById('colNext').disabled = c1>=meta.cols;
 
-  const res = await fetch(`/api/data?r0=${r0}&r1=${r1}&c0=${c0}&c1=${c1}`);
-  const {data} = await res.json();
+  const data = await window.pywebview.api.data_window(r0, r1, c0, c1);
 
   // stretch to the actually-rendered row/col count (may be fewer than the
   // auto-fit target on a small table or a partial last page), so the grid
@@ -264,42 +270,10 @@ function setFontSize(px){
 document.getElementById('fontUp').onclick = ()=>setFontSize(fontSize+1);
 document.getElementById('fontDown').onclick = ()=>setFontSize(fontSize-1);
 
-loadMeta();
+window.addEventListener('pywebviewready', loadMeta);
 </script>
 </body></html>
 """
-
-
-class Handler(BaseHTTPRequestHandler):
-    def log_message(self, fmt, *args):
-        pass
-
-    def _json(self, obj, code=200):
-        body = json.dumps(obj).encode()
-        self.send_response(code)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-    def do_GET(self):
-        parsed = urlparse(self.path)
-        if parsed.path == "/":
-            body = PAGE.encode()
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-        elif parsed.path == "/api/meta":
-            self._json(meta())
-        elif parsed.path == "/api/data":
-            q = parse_qs(parsed.query)
-            r0, r1 = int(q["r0"][0]), int(q["r1"][0])
-            c0, c1 = int(q["c0"][0]), int(q["c1"][0])
-            self._json({"data": data_window(r0, r1, c0, c1)})
-        else:
-            self.send_error(404)
 
 
 def main():
@@ -311,15 +285,9 @@ def main():
     TABLE = biom.load_table(path)
     FILENAME = path
 
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    port = server.server_address[1]
-    url = f"http://127.0.0.1:{port}/"
-    threading.Timer(0.4, lambda: webbrowser.open(url)).start()
-    print(f"Serving {path} at {url}")
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        pass
+    title = f"BIOM Viewer — {os.path.basename(path)}"
+    webview.create_window(title, html=PAGE, js_api=Api(), width=1280, height=820, min_size=(600, 400))
+    webview.start()
 
 
 if __name__ == "__main__":
