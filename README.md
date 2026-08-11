@@ -5,10 +5,14 @@
 <p align="center"><strong>Instant, lazy-loading viewer for <code>.biom</code> files — never densifies the full sparse matrix.</strong></p>
 
 <p align="center">
-  <a href="https://github.com/yarintm/biom-viewer/actions/workflows/ci.yml"><img src="https://github.com/yarintm/biom-viewer/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/yarintm/biom-viewer/releases/latest"><img src="https://img.shields.io/github/v/release/yarintm/biom-viewer" alt="Latest release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
   <a href="pyproject.toml"><img src="https://img.shields.io/badge/python-3.9+-blue.svg" alt="Python 3.9+"></a>
   <img src="https://img.shields.io/badge/platform-macOS-lightgrey.svg" alt="Platform: macOS">
+</p>
+
+<p align="center">
+  <a href="https://github.com/yarintm/biom-viewer/releases/latest/download/BiomViewer-macos-arm64.zip"><strong>⬇ Download for macOS</strong></a>
 </p>
 
 A lightweight, double-clickable desktop viewer for **`.biom`** (Biological
