@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "biom-viewer"
+version = "0.1.0"
+description = "Instant, lazy-loading viewer for .biom (Biological Observation Matrix) files — no CLI conversion, no dense-matrix memory blowup."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Yarin Tamam" }]
+keywords = ["biom", "bioinformatics", "microbiome", "sparse-matrix", "viewer"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Intended Audience :: Science/Research",
+  "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
+dependencies = [
+  "biom-format>=2.1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[project.urls]
+Homepage = "https://github.com/yarintm/biom-viewer"
+Issues = "https://github.com/yarintm/biom-viewer/issues"
+
+[project.scripts]
+biom-viewer = "biom_viewer.app:main"
+
+[tool.setuptools.packages.find]
+include = ["biom_viewer*"]
