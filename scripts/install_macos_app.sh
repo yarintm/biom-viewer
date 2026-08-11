@@ -35,6 +35,10 @@ PLIST="$APP/Contents/Info.plist"
 ICON="$(dirname "$0")/icon.icns"
 if [ -f "$ICON" ]; then
   cp "$ICON" "$APP/Contents/Resources/droplet.icns"
+  # osacompile also bakes the default icon into a compiled asset catalog,
+  # which macOS's icon resolver prefers over the loose .icns above — drop
+  # it so our replacement actually takes effect.
+  rm -f "$APP/Contents/Resources/Assets.car"
   touch "$APP"
 fi
 
