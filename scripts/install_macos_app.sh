@@ -32,5 +32,11 @@ PLIST="$APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleDocumentTypes:0:CFBundleTypeExtensions:0 biom" "$PLIST"
 /usr/libexec/PlistBuddy -c "Add :CFBundleDocumentTypes:0:CFBundleTypeName string 'BIOM File'" "$PLIST" 2>/dev/null || true
 
+ICON="$(dirname "$0")/icon.icns"
+if [ -f "$ICON" ]; then
+  cp "$ICON" "$APP/Contents/Resources/droplet.icns"
+  touch "$APP"
+fi
+
 echo "Installed $APP (launches: $BIN)"
 echo "To make it the default handler: right-click a .biom file -> Get Info -> Open with -> BiomViewer -> Change All..."
