@@ -23,11 +23,9 @@ you.
   <img src="docs/screenshot-light.jpg" width="80%" alt="biom-viewer, light mode">
 </p>
 
-**Contents:** [Features](#features) · [The problem](#the-problem) ·
-[How it avoids it](#how-it-avoids-all-three) · [Architecture](#architecture) ·
-[Install](#install) · [Usage](#usage) ·
-[macOS integration](#macos-double-click-integration) ·
-[Development](#development)
+**Contents:** [Features](#features) · [Get the app](#get-the-app-macos) ·
+[The problem](#the-problem) · [How it avoids it](#how-it-avoids-all-three) ·
+[Architecture](#architecture) · [Development](#development)
 
 ## Features
 
@@ -42,6 +40,23 @@ you.
   clipboard, with row/column highlighting
 - **Dark/light theme** and adjustable font size
 - **Double-click `.biom` files to open**, like any other document (macOS)
+
+## Get the app (macOS)
+
+No Python, no `pip`, no terminal.
+
+1. Download **`BiomViewer-macos-arm64.zip`** from the
+   [latest release](https://github.com/yarintm/biom-viewer/releases/latest)
+2. Unzip it, drag `BiomViewer.app` to **Applications**
+3. Right-click any `.biom` file → **Get Info** → **Open with** →
+   **BiomViewer** → **Change All…** (one-time, so double-click just works
+   from then on)
+
+That's it — `.biom` files open like any other document. The app bundles
+Python, `biom-format`, `pywebview`, `scipy`, `numpy`, `h5py`, and `pandas`
+itself, so there's nothing else to install. (Apple Silicon only for now —
+see [Development](#development) to build for Intel or run from source on
+Linux/Windows.)
 
 ## The problem
 
@@ -81,8 +96,7 @@ to your window size, stretching cells to fill the space exactly. Move to the
 next page and the frontend asks the backend for the next small window.
 
 **No CLI conversion, no double-click friction.** Double-click a `.biom` file
-and it just opens — see [macOS integration](#macos-double-click-integration)
-below.
+and it just opens — see [Get the app](#get-the-app-macos) above.
 
 ## Architecture
 
@@ -112,22 +126,20 @@ those calls never leave the process. The whole app is one Python file
 equivalent for parsing HDF5 BIOM tables) and `pywebview` (wraps the OS's
 native webview — WKWebView on macOS — so there's no bundled Chromium).
 
-## Install
+## Development
+
+Running from source (any OS pywebview supports — see its
+[docs](https://pywebview.flowrl.com/) for Linux/Windows GUI backend setup):
 
 ```bash
-pip install biom-viewer   # once published to PyPI
-# or, from a clone:
-pip install -e .
-```
+git clone https://github.com/yarintm/biom-viewer.git
+cd biom-viewer
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"
+pytest
 
-## Usage
-
-```bash
 biom-viewer path/to/table.biom
 ```
-
-Opens a native window (not a browser tab — no address bar, no server, no
-port). Closing the window ends the process.
 
 ### Controls
 
@@ -140,33 +152,26 @@ port). Closing the window ends the process.
   column it belongs to are highlighted
 - 🌙/☀️ toggles dark/light theme; **A-** / **A+** adjust font size
 
-## macOS double-click integration
+### Building the standalone macOS app
 
-Skip the terminal entirely — make `.biom` files openable like any document.
-
-```bash
-pip install -e .                    # or: pip install biom-viewer
-./scripts/install_macos_app.sh      # builds ~/Applications/BiomViewer.app
-```
-
-Then: right-click any `.biom` file → **Get Info** → **Open with** →
-**BiomViewer** → **Change All…**. From then on, double-clicking a `.biom`
-file opens it directly in its own window.
-
-The generated app is a thin AppleScript wrapper that calls whatever
-`biom-viewer` is on your `PATH` at install time — no hardcoded paths, so it
-keeps working across virtualenvs and machines as long as you re-run the
-script after reinstalling.
-
-## Development
+This is what produces the release download in [Get the app](#get-the-app-macos):
 
 ```bash
-git clone https://github.com/yarintm/biom-viewer.git
-cd biom-viewer
-python3 -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
-pytest
+./scripts/build_macos_app.sh
 ```
+
+Bundles the interpreter and every dependency via PyInstaller into
+`dist/BiomViewer.app` — no separate Python install needed on the machine
+that runs it. It's wrapped in a thin AppleScript droplet (in
+`Contents/MacOS`) because macOS delivers "open this document" as an Apple
+Event, not a command-line argument, and that's the reliable way to receive
+it; the droplet just re-execs the bundled engine
+(`Contents/Resources/BiomViewerEngine.app`) with the file path.
+
+If you'd rather point a `.app` at an existing `pip install` instead of
+building a whole bundle (e.g. while developing), `scripts/install_macos_app.sh`
+does that — it builds a lighter wrapper around whatever `biom-viewer` is on
+your `PATH`.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the design constraints a PR
 should respect (mainly: never densify the whole table).

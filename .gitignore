@@ -9,3 +9,6 @@ venv/
 .DS_Store
 *.log
 BiomViewer.app/
+build_output/
+.build-venv/
+*.spec
