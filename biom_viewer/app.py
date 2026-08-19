@@ -765,7 +765,11 @@ async function render(){
   }
   if(stripOnCols()){
     grid.appendChild(fillerCell());
-    colStats.forEach(s => grid.appendChild(statCell(s)));
+    colStats.forEach((s, i) => {
+      const cell = statCell(s);
+      cell.dataset.c = c0 + i; // so applyHighlight() treats it as part of its column
+      grid.appendChild(cell);
+    });
   }
   for(let r=r0;r<r1;r++){
     const label = rowLabel(r);
