@@ -78,3 +78,35 @@ def test_numeric_summary_empty_values():
         "kind": "numeric", "n": 3, "sum": None, "min": None,
         "max": None, "mean": None, "median": None, "histogram": [],
     }
+
+
+def test_row_summary_mixed_sparse_row():
+    app.TABLE = make_table()
+    s = app.row_summary(1)  # obs2: [2, 0, 0, 5]
+    assert s["kind"] == "numeric"
+    assert s["n"] == 4
+    assert s["nonzero"] == 2
+    assert s["sparsity"] == 50.0
+    assert s["sum"] == 7.0
+    assert s["min"] == 2.0
+    assert s["max"] == 5.0
+    assert s["mean"] == 3.5
+    assert s["median"] == 3.5
+
+
+def test_row_summary_all_zero_row():
+    app.TABLE = make_table()
+    s = app.row_summary(2)  # obs3: [0, 0, 0, 0]
+    assert s["nonzero"] == 0
+    assert s["sparsity"] == 100.0
+    assert s["min"] is None
+    assert s["mean"] is None
+    assert s["histogram"] == []
+
+
+def test_col_summary_single_nonzero_value():
+    app.TABLE = make_table()
+    s = app.col_summary(0)  # s1: [0, 2, 0]
+    assert s["nonzero"] == 1
+    assert s["sparsity"] == round(2 / 3 * 100, 1)
+    assert s["min"] == s["max"] == 2.0

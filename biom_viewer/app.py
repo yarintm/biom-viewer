@@ -70,6 +70,26 @@ def data_window(r0, r1, c0, c1):
     return sub.toarray().tolist()
 
 
+def row_summary(r):
+    row = TABLE.matrix_data.tocsr()[r, :]
+    values = [float(v) for v in row.data if v != 0]
+    total = TABLE.shape[1]
+    summary = _numeric_summary(values, total)
+    summary["nonzero"] = len(values)
+    summary["sparsity"] = round((total - len(values)) / total * 100, 1) if total else 0.0
+    return summary
+
+
+def col_summary(c):
+    col = TABLE.matrix_data.tocsc()[:, c]
+    values = [float(v) for v in col.data if v != 0]
+    total = TABLE.shape[0]
+    summary = _numeric_summary(values, total)
+    summary["nonzero"] = len(values)
+    summary["sparsity"] = round((total - len(values)) / total * 100, 1) if total else 0.0
+    return summary
+
+
 class Api:
     """Exposed to the frontend as window.pywebview.api.* — no HTTP server involved."""
 
@@ -78,6 +98,12 @@ class Api:
 
     def data_window(self, r0, r1, c0, c1):
         return data_window(r0, r1, c0, c1)
+
+    def row_summary(self, r):
+        return row_summary(r)
+
+    def col_summary(self, c):
+        return col_summary(c)
 
 
 PAGE = """<!doctype html>
