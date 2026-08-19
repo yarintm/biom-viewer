@@ -212,7 +212,7 @@ PAGE = """<!doctype html>
     --cell-border:light-dark(#ddd,#333); --hdr-bg:light-dark(#e8e8e8,#252525);
     --hdr-fg:light-dark(#333,#aaa);
     --nz-bg:light-dark(#bfe8d3,#274b3a); --z-fg:light-dark(#aaa,#666);
-    --hl:light-dark(#cfe0ff,#3a3a55); --sel-outline:var(--accent);
+    --hl:light-dark(#cdf0dc,#274b3a); --sel-outline:var(--accent);
     --fs:11px;
     --row-meta:light-dark(#c96a1a,#e08a3c); --row-meta-bg:light-dark(#fde3c8,#4a3420);
     --row-meta-fg:light-dark(#5c3410,#2a1c0f);
@@ -288,13 +288,16 @@ PAGE = """<!doctype html>
   .nz{background:var(--nz-bg)}
   .mv{color:var(--fg)}
   .mv-empty{color:var(--z-fg);font-style:italic}
-  .cell:not(.rh):not(.colhdr).hl-row,.cell:not(.rh):not(.colhdr).hl-col{background:var(--hl) !important}
+  .cell:not(.rh):not(.colhdr):not(.stat-cell).hl-row,.cell:not(.rh):not(.colhdr):not(.stat-cell).hl-col{background:var(--hl) !important}
   .rh.hl-row,.colhdr.hl-col{box-shadow:inset 0 0 0 2px var(--sel-outline);font-weight:700}
-  /* Plain .rh headers keep their own axis-color background under selection
-     (border-only, no fill) — but .rh-stats is a combined header+stats block,
-     not just a label, so it should fill solid like every other selected
-     cell instead of leaving all that stats text sitting on a bare border. */
-  .rh-stats.hl-row{background:var(--hl) !important}
+  /* When the column stats strip is showing, .colhdr (field/sample label)
+     and the .stat-cell directly below it are two separate grid cells that
+     read as one merged header block -- so their shared border must not
+     double up into two stacked boxes. colhdr keeps top/left/right only,
+     stat-cell keeps bottom/left/right only, and the seam's native cell
+     border is hidden so nothing shows between them. */
+  #grid.col-stats .colhdr.hl-col{box-shadow:inset 0 2px 0 var(--sel-outline),inset 2px 0 0 var(--sel-outline),inset -2px 0 0 var(--sel-outline)}
+  #grid.col-stats .stat-cell.hl-col{box-shadow:inset 0 -2px 0 var(--sel-outline),inset 2px 0 0 var(--sel-outline),inset -2px 0 0 var(--sel-outline);border-top-color:transparent}
   .hl-cell{outline:2px solid var(--sel-outline);outline-offset:-2px;position:relative;z-index:1}
   /* row axis (observation ids, leftmost column) orange; col axis (sample ids,
      top row) blue — in data mode both are on screen at once */
@@ -323,9 +326,10 @@ PAGE = """<!doctype html>
              background:var(--hdr-bg);margin:-4px -6px 4px;padding:4px 6px;cursor:pointer}
   .rh-stats .rh-label:hover{background:var(--input-border)}
   /* The label bar's own opaque background paints over the parent cell's
-     top edge, hiding the selection border there -- redraw just that edge
-     on the label itself so the border reads as continuous when selected. */
-  .rh-stats.hl-row .rh-label{box-shadow:inset 0 2px 0 var(--sel-outline)}
+     top/left/right edges (its negative margins stretch it to the cell
+     border), hiding the selection border there -- redraw those edges on
+     the label itself so the border reads as continuous when selected. */
+  .rh-stats.hl-row .rh-label{box-shadow:inset 0 2px 0 var(--sel-outline),inset 2px 0 0 var(--sel-outline),inset -2px 0 0 var(--sel-outline)}
   .stat-line{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .stat-line b{color:var(--fg);font-weight:600}
   .stat-bars{display:flex;align-items:flex-end;gap:1px;height:calc(var(--fs)*1.8);margin:1px 0}
@@ -394,16 +398,56 @@ let autoRows=20, autoCols=8, rowHPx=22, colWPx=130;
 let availH=0, availW=0;
 let summaryVisible=false;
 const GAP=14;
-const COLW_TARGET=130, RHW=240;
+const COLW_TARGET=130, RHW_MIN=60, RHW_MAX=240;
+let RHW=RHW_MAX;
 function rowsPerPage(){ return autoRows; }
 function colsPerPage(){ return autoCols; }
 
-// The stats strip's row-track height. Scales with fontSize (like everything
-// else driven by the A+/A- buttons) so it never clips as text grows.
-// The row-header case (stripOnRows) prepends its own label line on top of
-// statCellHtml's content, so it needs one extra line of budget over the
-// top-strip case (stripOnCols), where the label is a separate cell above it.
-function statRowH(){ return Math.round(fontSize*(7 + (stripOnRows() ? 1 : 0))) + 15; }
+// The row-header column's width, sized to its actual content instead of a
+// flat 240px: in 'col' mode with the stats strip on (field name + a stats
+// block needing real room), keep the generous fixed width; otherwise (plain
+// ids, e.g. numeric feature ids in row/data mode) shrink to fit the longest
+// label so it doesn't waste space for no reason.
+let _rhwCache = null;
+function computeRHW(){
+  if(stripOnRows()) return RHW_MAX;
+  const key = mode+'|'+fontSize;
+  if(_rhwCache && _rhwCache.key===key) return _rhwCache.val;
+  const labels = mode==='col' ? colFields : (meta ? meta.row_ids : []);
+  let longest = '';
+  (labels||[]).forEach(l=>{ const s=''+l; if(s.length>longest.length) longest=s; });
+  const probe = document.createElement('span');
+  probe.style.cssText = `position:absolute;visibility:hidden;white-space:nowrap;left:-9999px;top:-9999px;font-size:${fontSize}px`;
+  probe.textContent = longest;
+  document.body.appendChild(probe);
+  const w = probe.getBoundingClientRect().width;
+  probe.remove();
+  const val = Math.min(RHW_MAX, Math.max(RHW_MIN, Math.ceil(w) + 16));
+  _rhwCache = {key, val};
+  return val;
+}
+
+// The stats strip's row-track height, measured (not guessed) off a real
+// offscreen worst-case cell so it never clips regardless of fontSize: hand
+// magic-number line-height math drifts from the actual CSS as soon as
+// padding/gap/line-height values change, and it did.
+let _statRowHCache = null;
+function statRowH(){
+  const key = fontSize + '|' + stripOnRows();
+  if(_statRowHCache && _statRowHCache.key===key) return _statRowHCache.val;
+  const worstCase = {missing:0, n:1, distinct:999,
+    top:[{value:'x',count:1},{value:'x',count:1},{value:'x',count:1}], other_count:1};
+  const probe = document.createElement('div');
+  probe.className = 'cell stat-cell' + (stripOnRows() ? ' rh-stats' : '');
+  probe.style.cssText = 'position:absolute;visibility:hidden;left:-9999px;top:-9999px;'
+    + `width:${stripOnRows() ? RHW_MAX : COLW_TARGET}px;`;
+  probe.innerHTML = (stripOnRows() ? '<div class="stat-line rh-label">X</div>' : '') + statCellHtml(worstCase);
+  document.body.appendChild(probe);
+  const val = Math.ceil(probe.getBoundingClientRect().height);
+  probe.remove();
+  _statRowHCache = {key, val};
+  return val;
+}
 
 // The metadata *fields* — the axis actually worth summarizing — sit on the
 // row axis in 'col' mode (colFields) and the column axis everywhere else
@@ -435,6 +479,7 @@ function computeFit(){
   const mainRect = document.getElementById('main').getBoundingClientRect();
   const colNavH = document.getElementById('colNav').getBoundingClientRect().height;
   availH = mainRect.height - colNavH - GAP - (stripOnCols() ? statRowH() : 0);
+  RHW = computeRHW();
   availW = mainRect.width - RHW - GAP;
 
   if(stripOnRows()){
@@ -751,7 +796,7 @@ async function render(){
     // Column headers stay short; only the field rows below need the tall
     // track, so the header doesn't compete with them for height.
     headerRowHPx = Math.round(fontSize*1.3) + 8;
-    rowHPx = (availH - headerRowHPx) / Math.max(renderedRows, rowsPerPage());
+    rowHPx = Math.max(statRowH(), (availH - headerRowHPx) / Math.max(renderedRows, rowsPerPage()));
   } else {
     rowHPx = availH/(Math.max(renderedRows, rowsPerPage())+1);
     headerRowHPx = rowHPx;
@@ -769,8 +814,9 @@ async function render(){
 
   const grid = document.getElementById('grid');
   const statRowTrack = stripOnCols() ? `${statRowH()}px ` : '';
+  grid.classList.toggle('col-stats', stripOnCols());
   grid.style.gridTemplateColumns = `${RHW}px repeat(${renderedCols}, ${colWPx}px)`;
-  grid.style.gridTemplateRows = `${rowHPx}px ${statRowTrack}repeat(${renderedRows}, ${rowHPx}px)`;
+  grid.style.gridTemplateRows = `${headerRowHPx}px ${statRowTrack}repeat(${renderedRows}, ${rowHPx}px)`;
   grid.innerHTML = '';
 
   const corner = document.createElement('div');
