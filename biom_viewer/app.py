@@ -297,7 +297,7 @@ PAGE = """<!doctype html>
   #metaModal .rows dd{margin:0;font-family:ui-monospace,monospace;word-break:break-word}
   #metaModal .empty{padding:0 14px 14px;color:var(--dim);font-size:12.5px}
   .stat-cell,.rh-stats{background:var(--panel-bg);color:var(--dim);font-size:calc(var(--fs)*0.9);line-height:1.35;
-             padding:4px 6px;display:flex;flex-direction:column;gap:2px;overflow:hidden;cursor:pointer}
+             padding:4px 6px;display:flex;flex-direction:column;gap:2px;overflow:hidden;cursor:pointer;min-height:0}
   .rh-stats{white-space:normal;background:var(--row-meta-bg)}
   .rh-stats .rh-label{font-size:var(--fs);font-weight:700;color:var(--row-meta);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .stat-line{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -374,7 +374,10 @@ function colsPerPage(){ return autoCols; }
 
 // The stats strip's row-track height. Scales with fontSize (like everything
 // else driven by the A+/A- buttons) so it never clips as text grows.
-function statRowH(){ return Math.round(fontSize*7) + 15; }
+// The row-header case (stripOnRows) prepends its own label line on top of
+// statCellHtml's content, so it needs one extra line of budget over the
+// top-strip case (stripOnCols), where the label is a separate cell above it.
+function statRowH(){ return Math.round(fontSize*(7 + (stripOnRows() ? 1 : 0))) + 15; }
 
 // The metadata *fields* — the axis actually worth summarizing — sit on the
 // row axis in 'col' mode (colFields) and the column axis everywhere else
