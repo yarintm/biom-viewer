@@ -22,6 +22,7 @@ if(!window.pywebview){
   window.pywebview = { api: {
     meta: () => post('/api/meta'),
     data_window: (r0,r1,c0,c1) => post('/api/data_window', {r0,r1,c0,c1}),
+    data_window_idx: (row_idxs, col_idxs) => post('/api/data_window_idx', {row_idxs, col_idxs}),
     row_summary: (r) => post('/api/row_summary', {r}),
     col_summary: (c) => post('/api/col_summary', {c}),
     field_summary: (axis, field) => post('/api/field_summary', {axis, field}),
@@ -34,6 +35,7 @@ if(!window.pywebview){
 API = {
     "/api/meta": lambda body: bv.meta(),
     "/api/data_window": lambda body: bv.data_window(body["r0"], body["r1"], body["c0"], body["c1"]),
+    "/api/data_window_idx": lambda body: bv.data_window_idx(body["row_idxs"], body["col_idxs"]),
     "/api/row_summary": lambda body: bv.row_summary(body["r"]),
     "/api/col_summary": lambda body: bv.col_summary(body["c"]),
     "/api/field_summary": lambda body: bv.field_summary(body["axis"], body["field"]),

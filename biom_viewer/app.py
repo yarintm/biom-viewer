@@ -94,6 +94,15 @@ def data_window(r0, r1, c0, c1):
     return sub.toarray().tolist()
 
 
+def data_window_idx(row_idxs, col_idxs):
+    # Gather arbitrary (unsorted, non-contiguous) row/col index lists —
+    # used once either axis has an active sort or filter, since the visible
+    # page no longer maps to a contiguous matrix range. Densify only the
+    # requested submatrix, same as data_window.
+    sub = TABLE.matrix_data.tocsr()[row_idxs, :].tocsc()[:, col_idxs]
+    return sub.toarray().tolist()
+
+
 def _axis_summary(vec, total):
     values = [float(v) for v in vec.data if v != 0]
     summary = _numeric_summary(values, total)
@@ -186,6 +195,9 @@ class Api:
 
     def data_window(self, r0, r1, c0, c1):
         return data_window(r0, r1, c0, c1)
+
+    def data_window_idx(self, row_idxs, col_idxs):
+        return data_window_idx(row_idxs, col_idxs)
 
     def row_summary(self, r):
         return row_summary(r)

@@ -46,6 +46,25 @@ def test_data_window_clamps_out_of_range_bounds():
     assert app.data_window(2, 10, 0, 10) == [[0, 0, 0, 0]]
 
 
+def test_data_window_idx_arbitrary_unsorted_indices():
+    app.TABLE = make_table()
+    # rows [2, 0] (reversed, non-contiguous), cols [3, 1]
+    assert app.data_window_idx([2, 0], [3, 1]) == [
+        [0, 0],
+        [0, 1],
+    ]
+
+
+def test_data_window_idx_single_element():
+    app.TABLE = make_table()
+    assert app.data_window_idx([1], [3]) == [[5]]
+
+
+def test_data_window_idx_full_axis_matches_data_window():
+    app.TABLE = make_table()
+    assert app.data_window_idx([0, 1, 2], [0, 1, 2, 3]) == app.data_window(0, 3, 0, 4)
+
+
 def test_histogram_ten_equal_width_buckets():
     buckets = _histogram([1.0, 2.0, 3.0, 4.0, 5.0])
     assert len(buckets) == 10
