@@ -297,7 +297,7 @@ PAGE = """<!doctype html>
   #metaModal .rows dd{margin:0;font-family:ui-monospace,monospace;word-break:break-word}
   #metaModal .empty{padding:0 14px 14px;color:var(--dim);font-size:12.5px}
   .stat-cell,.rh-stats{background:var(--panel-bg);color:var(--dim);font-size:calc(var(--fs)*0.9);line-height:1.35;
-             padding:4px 6px;display:flex;flex-direction:column;gap:2px;overflow:hidden;cursor:pointer;min-height:0}
+             padding:4px 6px;display:flex;flex-direction:column;gap:3px;overflow:hidden;cursor:pointer;min-height:0}
   .rh-stats{white-space:normal;background:var(--row-meta-bg)}
   .rh-stats .rh-label{font-size:var(--fs);font-weight:700;color:var(--row-meta);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .stat-line{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -387,6 +387,19 @@ function statRowH(){ return Math.round(fontSize*(7 + (stripOnRows() ? 1 : 0))) +
 // count) — tall rows are only affordable there.
 function stripOnRows(){ return summaryVisible && mode==='col'; }
 function stripOnCols(){ return summaryVisible && mode!=='col'; }
+
+// Toggling the strip can drastically shrink rowsPerPage() (tall stat rows
+// fit far fewer per page than plain rows), so the page that used to show
+// row `centerRow` may no longer be page 0. Recompute fit first, then land
+// on whichever page actually contains centerRow — otherwise the view jumps
+// back to the top of the list instead of staying on what was clicked.
+function toggleSummary(centerRow){
+  summaryVisible = !summaryVisible;
+  computeFit();
+  const maxPage = Math.max(0, Math.ceil(rowsTotal()/rowsPerPage()) - 1);
+  rowPage = centerRow!==undefined ? Math.floor(centerRow/rowsPerPage()) : Math.min(rowPage, maxPage);
+  render();
+}
 
 function computeFit(){
   // Derived from the font, never measured off a rendered cell: cell height is
@@ -733,7 +746,7 @@ async function render(){
       showSelected(label);
       applyHighlight();
     });
-    h.addEventListener('dblclick', ()=>{ summaryVisible = !summaryVisible; render(); });
+    h.addEventListener('dblclick', ()=>{ toggleSummary(); });
     grid.appendChild(h);
   }
   if(stripOnCols()){
@@ -757,7 +770,7 @@ async function render(){
       showSelected(label);
       applyHighlight();
     });
-    rh.addEventListener('dblclick', ()=>{ summaryVisible = !summaryVisible; render(); });
+    rh.addEventListener('dblclick', ()=>{ toggleSummary(r); });
     grid.appendChild(rh);
     for(let c=c0;c<c1;c++){
       const cell = document.createElement('div');
@@ -831,7 +844,7 @@ function miniHist(histogram){
 }
 
 function topValueRows(top, presentTotal){
-  return top.slice(0, 4).map(t => {
+  return top.slice(0, 3).map(t => {
     const pct = presentTotal ? Math.round(t.count/presentTotal*100) : 0;
     return `<div class="stat-top-row" title="${escapeHtml(t.value)}: ${t.count}">
       <span class="fill" style="width:${pct}%"></span>
