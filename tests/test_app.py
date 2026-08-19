@@ -146,3 +146,18 @@ def test_field_summary_categorical_field_top10_and_other_count():
     assert [t["value"] for t in s["top"]] == [f"habitat{i}" for i in range(10)]
     assert all(t["count"] == 1 for t in s["top"])
     assert s["other_count"] == 2
+
+
+def test_field_summary_numeric_field_treats_nan_as_missing():
+    # pandas-sourced sample metadata commonly uses NaN as its missing-value
+    # marker for numeric columns; NaN must not poison sum/min/max/median.
+    table = make_table_with_sample_metadata()
+    table.metadata(axis="sample")[1]["ph"] = float("nan")  # was 1.0
+    app.TABLE = table
+    s = app.field_summary("sample", "ph")
+    assert s["kind"] == "numeric"
+    assert s["n"] == 12
+    assert s["missing"] == 2  # the original None plus the new NaN
+    assert s["min"] == 2.0
+    assert s["max"] == 11.0
+    assert sum(b["count"] for b in s["histogram"]) == 10

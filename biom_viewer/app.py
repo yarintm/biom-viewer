@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Lazy-loading BIOM viewer: native window (pywebview) + biom-format, sparse-window slicing, canvas grid UI."""
+import math
 import os
 import sys
 from collections import Counter
@@ -115,7 +116,10 @@ def field_summary(axis, field):
     entries = TABLE.metadata(axis=axis)
     total = len(entries)
     raw = [(dict(e) if e else {}).get(field) for e in entries]
-    present = [v for v in raw if v is not None and v != ""]
+    present = [
+        v for v in raw
+        if v is not None and v != "" and not (isinstance(v, float) and not math.isfinite(v))
+    ]
     missing = total - len(present)
 
     if present and all(_is_numeric(v) for v in present):
