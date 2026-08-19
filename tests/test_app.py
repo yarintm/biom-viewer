@@ -110,3 +110,39 @@ def test_col_summary_single_nonzero_value():
     assert s["nonzero"] == 1
     assert s["sparsity"] == round(2 / 3 * 100, 1)
     assert s["min"] == s["max"] == 2.0
+
+
+def make_table_with_sample_metadata():
+    # 2 observations x 12 samples; abundance values irrelevant for these tests.
+    data = np.zeros((2, 12))
+    sample_ids = [f"s{i}" for i in range(12)]
+    sample_metadata = []
+    for i in range(12):
+        ph = None if i == 0 else float(i)  # one missing, values 1..11 present
+        sample_metadata.append({"ph": ph, "habitat": f"habitat{i}"})
+    return biom.Table(data, ["o1", "o2"], sample_ids, sample_metadata=sample_metadata)
+
+
+def test_field_summary_numeric_field_with_missing():
+    app.TABLE = make_table_with_sample_metadata()
+    s = app.field_summary("sample", "ph")
+    assert s["kind"] == "numeric"
+    assert s["n"] == 12
+    assert s["missing"] == 1
+    assert s["min"] == 1.0
+    assert s["max"] == 11.0
+    assert s["mean"] == 6.0
+    assert s["median"] == 6.0
+    assert sum(b["count"] for b in s["histogram"]) == 11
+
+
+def test_field_summary_categorical_field_top10_and_other_count():
+    app.TABLE = make_table_with_sample_metadata()
+    s = app.field_summary("sample", "habitat")
+    assert s["kind"] == "categorical"
+    assert s["n"] == 12
+    assert s["missing"] == 0
+    assert len(s["top"]) == 10
+    assert [t["value"] for t in s["top"]] == [f"habitat{i}" for i in range(10)]
+    assert all(t["count"] == 1 for t in s["top"])
+    assert s["other_count"] == 2

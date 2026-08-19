@@ -2,6 +2,7 @@
 """Lazy-loading BIOM viewer: native window (pywebview) + biom-format, sparse-window slicing, canvas grid UI."""
 import os
 import sys
+from collections import Counter
 
 import biom
 import webview
@@ -96,6 +97,46 @@ def col_summary(c):
     return _axis_summary(_csc()[:, c], TABLE.shape[0])
 
 
+def _is_numeric(v):
+    if isinstance(v, bool):
+        return False
+    if isinstance(v, (int, float)):
+        return True
+    if isinstance(v, str):
+        try:
+            float(v)
+            return True
+        except ValueError:
+            return False
+    return False
+
+
+def field_summary(axis, field):
+    entries = TABLE.metadata(axis=axis)
+    total = len(entries)
+    raw = [(dict(e) if e else {}).get(field) for e in entries]
+    present = [v for v in raw if v is not None and v != ""]
+    missing = total - len(present)
+
+    if present and all(_is_numeric(v) for v in present):
+        values = [float(v) for v in present]
+        summary = _numeric_summary(values, total)
+        summary["missing"] = missing
+        return summary
+
+    counts = Counter(str(v) for v in present)
+    ranked = counts.most_common()
+    top = [{"value": v, "count": c} for v, c in ranked[:10]]
+    other_count = sum(c for _, c in ranked[10:])
+    return {
+        "kind": "categorical",
+        "n": total,
+        "missing": missing,
+        "top": top,
+        "other_count": other_count,
+    }
+
+
 class Api:
     """Exposed to the frontend as window.pywebview.api.* — no HTTP server involved."""
 
@@ -110,6 +151,9 @@ class Api:
 
     def col_summary(self, c):
         return col_summary(c)
+
+    def field_summary(self, axis, field):
+        return field_summary(axis, field)
 
 
 PAGE = """<!doctype html>
