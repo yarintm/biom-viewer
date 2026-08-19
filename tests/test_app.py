@@ -142,6 +142,7 @@ def test_field_summary_categorical_field_top10_and_other_count():
     assert s["kind"] == "categorical"
     assert s["n"] == 12
     assert s["missing"] == 0
+    assert s["distinct"] == 12
     assert len(s["top"]) == 10
     assert [t["value"] for t in s["top"]] == [f"habitat{i}" for i in range(10)]
     assert all(t["count"] == 1 for t in s["top"])

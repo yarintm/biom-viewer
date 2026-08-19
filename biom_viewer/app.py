@@ -158,6 +158,7 @@ def field_summary(axis, field):
         "kind": "categorical",
         "n": total,
         "missing": missing,
+        "distinct": len(ranked),
         "top": top,
         "other_count": other_count,
     }
@@ -249,12 +250,10 @@ PAGE = """<!doctype html>
   .sr-more[data-tab]{cursor:pointer;text-decoration:underline}
   .sr-more[data-tab]:hover{color:var(--fg)}
   .sr-empty{padding:8px 10px;font-size:12.5px;color:var(--dim)}
-  #selectedWrap{display:flex;align-items:center;gap:6px;margin:6px 10px}
-  #selected{flex:1;box-sizing:border-box;padding:5px 8px;background:transparent;color:var(--dim);
+  #selected{width:100%;box-sizing:border-box;margin:6px 0;padding:5px 8px;background:transparent;color:var(--dim);
              border:1px solid transparent;border-radius:4px;font-family:ui-monospace,monospace;outline:none;
              caret-color:transparent;transition:color .15s}
   #selected.flash{color:var(--fg)}
-  #summaryBtn{display:none;flex-shrink:0}
   button.nav,button.tool{background:var(--panel-bg);color:var(--fg);border:1px solid var(--input-border);border-radius:4px;padding:4px 10px;cursor:pointer;
              font-size:14px;line-height:1}
   button.nav:disabled{opacity:.35;cursor:default}
@@ -276,6 +275,7 @@ PAGE = """<!doctype html>
   .mv{color:var(--fg)}
   .mv-empty{color:var(--z-fg);font-style:italic}
   .hl-row,.hl-col{background:var(--hl) !important}
+  .rh.hl-row,.colhdr.hl-col{background:inherit !important;box-shadow:inset 0 0 0 2px var(--sel-outline);font-weight:700}
   .hl-cell{outline:2px solid var(--sel-outline);outline-offset:-2px;position:relative;z-index:1}
   /* row axis (observation ids, leftmost column) orange; col axis (sample ids,
      top row) blue — in data mode both are on screen at once */
@@ -296,14 +296,17 @@ PAGE = """<!doctype html>
   #metaModal .rows dt{color:var(--dim);white-space:nowrap}
   #metaModal .rows dd{margin:0;font-family:ui-monospace,monospace;word-break:break-word}
   #metaModal .empty{padding:0 14px 14px;color:var(--dim);font-size:12.5px}
-  #summaryExtra .sg-cap{padding:2px 14px 4px;font:700 10px/1.4 ui-monospace,monospace;color:var(--dim);letter-spacing:.04em;text-transform:uppercase}
-  #summaryExtra .hist{padding:0 14px 12px}
-  .hist-row{display:flex;align-items:center;gap:6px;font-size:11px;margin:3px 0}
-  .hist-label{width:100px;flex-shrink:0;color:var(--dim);text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .hist-bar-wrap{flex:1;background:var(--hdr-bg);border-radius:3px;overflow:hidden;height:12px}
-  .hist-bar{height:100%;background:var(--accent)}
-  .hist-count{width:32px;flex-shrink:0;color:var(--dim)}
-  #summaryExtra .sr-more{padding:0 14px 12px;font-size:11px;color:var(--dim);font-style:italic}
+  .stat-cell{background:var(--panel-bg);color:var(--dim);font-size:9.5px;line-height:1.35;
+             padding:4px 6px;display:flex;flex-direction:column;gap:2px;overflow:hidden;cursor:default}
+  .stat-line{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .stat-line b{color:var(--fg);font-weight:600}
+  .stat-bars{display:flex;align-items:flex-end;gap:1px;height:20px;margin:1px 0}
+  .stat-bars .bar{flex:1;background:var(--accent);border-radius:1px;min-height:2px}
+  .stat-top-row{position:relative;padding:1px 3px;border-radius:2px;overflow:hidden;display:flex;
+                align-items:center;justify-content:space-between;gap:4px}
+  .stat-top-row .fill{position:absolute;inset:0;background:var(--hl);z-index:0}
+  .stat-top-row .lbl,.stat-top-row .pct{position:relative;z-index:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .stat-top-row .pct{flex-shrink:0;font-family:ui-monospace,monospace}
 </style></head>
 <body class="mode-data">
 <div id="info">
@@ -327,10 +330,8 @@ PAGE = """<!doctype html>
     <button class="tool" id="fontUp">A+</button>
   </span>
 </div>
-<div id="selectedWrap">
-  <input id="selected" readonly value="Click a row, column, or cell to see its full text here (auto-copied to clipboard).">
-  <button class="tool" id="summaryBtn" title="Show summary of the selected row/column">Σ Summary</button>
-</div>
+<input id="selected" readonly value="Click a row, column, or cell to see its full text here (auto-copied to clipboard). Double-click a header to toggle summary stats.">
+
 <div id="body">
   <div id="rowNav">
     <button class="nav" id="rowUp">▲</button>
@@ -353,7 +354,6 @@ PAGE = """<!doctype html>
       <button class="x" id="metaClose">✕</button>
     </header>
     <dl class="rows" id="metaRows"></dl>
-    <div id="summaryExtra"></div>
   </div>
 </div>
 <script>
@@ -364,8 +364,15 @@ window.onerror = (msg, url, line, col) => {
 let meta=null, rowPage=0, colPage=0, selR=null, selC=null, fontSize=11;
 let autoRows=20, autoCols=8, rowHPx=22, colWPx=130;
 let availH=0, availW=0;
+let summaryVisible=false;
 const GAP=14;
 const COLW_TARGET=130, RHW=240;
+// Column stats get their own row (fixed height, independent of the data row
+// height). Row stats have no such home: each row header is only one grid
+// row tall (~22-30px), nowhere near enough to fit a 3-line stat block — so
+// unlike Data Wrangler (whose columns *are* the only axis it summarizes),
+// this app only summarizes the column axis inline, never the row axis.
+const STAT_ROW_H=92;
 function rowsPerPage(){ return autoRows; }
 function colsPerPage(){ return autoCols; }
 
@@ -376,7 +383,7 @@ function computeFit(){
   const rowHTarget = Math.round(fontSize*1.3) + 8; // 3px padding + 1px border, top and bottom
   const mainRect = document.getElementById('main').getBoundingClientRect();
   const colNavH = document.getElementById('colNav').getBoundingClientRect().height;
-  availH = mainRect.height - colNavH - GAP;
+  availH = mainRect.height - colNavH - GAP - (summaryVisible ? STAT_ROW_H : 0);
   availW = mainRect.width - RHW - GAP;
 
   const totalRowsTarget = Math.max(2, Math.floor(availH/rowHTarget)); // includes header row
@@ -684,9 +691,16 @@ async function render(){
   rowHPx = availH/(Math.max(renderedRows, rowsPerPage())+1);
   colWPx = availW/renderedCols;
 
+  // Fetch stats for every visible column up front, in parallel, so the grid
+  // below can be built synchronously once everything has arrived.
+  const colStats = summaryVisible
+    ? await Promise.all(Array.from({length: renderedCols}, (_, k) => colStatsFetch(c0+k)))
+    : null;
+
   const grid = document.getElementById('grid');
+  const statRowTrack = summaryVisible ? `${STAT_ROW_H}px ` : '';
   grid.style.gridTemplateColumns = `${RHW}px repeat(${renderedCols}, ${colWPx}px)`;
-  grid.style.gridTemplateRows = `repeat(${renderedRows+1}, ${rowHPx}px)`;
+  grid.style.gridTemplateRows = `${rowHPx}px ${statRowTrack}repeat(${renderedRows}, ${rowHPx}px)`;
   grid.innerHTML = '';
 
   const corner = document.createElement('div');
@@ -704,7 +718,12 @@ async function render(){
       showSelected(label);
       applyHighlight();
     });
+    h.addEventListener('dblclick', ()=>{ summaryVisible = !summaryVisible; render(); });
     grid.appendChild(h);
+  }
+  if(summaryVisible){
+    grid.appendChild(fillerCell());
+    colStats.forEach(s => grid.appendChild(statCell(s)));
   }
   for(let r=r0;r<r1;r++){
     const label = rowLabel(r);
@@ -718,6 +737,7 @@ async function render(){
       showSelected(label);
       applyHighlight();
     });
+    rh.addEventListener('dblclick', ()=>{ summaryVisible = !summaryVisible; render(); });
     grid.appendChild(rh);
     for(let c=c0;c<c1;c++){
       const cell = document.createElement('div');
@@ -772,87 +792,85 @@ function showSelected(text){
 
 function fmtNum(v){ return Number.isInteger(v) ? String(v) : v.toFixed(2); }
 
-// Returns null if no exactly-one-axis selection exists (nothing selected, or
-// a specific cell with both selR and selC set). Otherwise returns the label
-// to show and a fetch() that calls the matching backend summary method.
-function summaryTarget(){
-  if(selR!==null && selC!==null) return null;
-  if(selR!==null){
-    if(mode==='col') return {label: colFields[selR], fetch: ()=>window.pywebview.api.field_summary('sample', colFields[selR])};
-    return {label: rowLabel(selR), fetch: ()=>window.pywebview.api.row_summary(selR)};
+// The column axis is field-driven only in 'row' mode (observation metadata
+// fields replace samples); everywhere else it's the sample axis, unchanged
+// from data mode. Matches colLabel's own mode branch.
+function colStatsFetch(j){
+  return mode==='row'
+    ? window.pywebview.api.field_summary('observation', rowFields[j])
+    : window.pywebview.api.col_summary(j);
+}
+
+function miniHist(histogram){
+  if(!histogram.length) return '';
+  const max = Math.max(...histogram.map(b=>b.count), 1);
+  const bars = histogram.map(b =>
+    `<span class="bar" style="height:${Math.max(4, b.count/max*100)}%" title="${fmtNum(b.lo)}–${fmtNum(b.hi)}: ${b.count}"></span>`
+  ).join('');
+  return `<div class="stat-bars">${bars}</div>`;
+}
+
+function topValueRows(top, presentTotal){
+  return top.slice(0, 4).map(t => {
+    const pct = presentTotal ? Math.round(t.count/presentTotal*100) : 0;
+    return `<div class="stat-top-row" title="${escapeHtml(t.value)}: ${t.count}">
+      <span class="fill" style="width:${pct}%"></span>
+      <span class="lbl">${escapeHtml(t.value)}</span>
+      <span class="pct">${pct}%</span>
+    </div>`;
+  }).join('');
+}
+
+// Compact Data-Wrangler-style stats block: presence line (missing or nonzero),
+// then either a mini histogram + min/max (numeric) or distinct count + top
+// values (categorical). Same shape for row_summary/col_summary/field_summary.
+function statCellHtml(s){
+  const presence = s.nonzero!==undefined
+    ? `Nonzero <b>${s.nonzero}</b> (${(100-s.sparsity).toFixed(0)}%)`
+    : `Missing <b>${s.missing}</b> (${s.n ? Math.round(s.missing/s.n*100) : 0}%)`;
+
+  if(s.kind==='numeric'){
+    const range = s.min===null ? '' : `<div class="stat-line">Min ${fmtNum(s.min)} · Max ${fmtNum(s.max)}</div>`;
+    return `<div class="stat-line">${presence}</div>${miniHist(s.histogram)}${range}`;
   }
-  if(selC!==null){
-    if(mode==='row') return {label: rowFields[selC], fetch: ()=>window.pywebview.api.field_summary('observation', rowFields[selC])};
-    return {label: colLabel(selC), fetch: ()=>window.pywebview.api.col_summary(selC)};
-  }
-  return null;
+
+  const distinctPct = s.n ? Math.round(s.distinct/s.n*100) : 0;
+  const presentTotal = s.n - s.missing;
+  const other = s.other_count ? `<div class="stat-line">+${s.other_count} other</div>` : '';
+  return `<div class="stat-line">${presence}</div>` +
+    `<div class="stat-line">Distinct <b>${s.distinct}</b> (${distinctPct}%)</div>` +
+    topValueRows(s.top, presentTotal) + other;
+}
+
+function statCell(s){
+  const cell = document.createElement('div');
+  cell.className = 'cell stat-cell';
+  cell.innerHTML = statCellHtml(s);
+  return cell;
+}
+
+function fillerCell(){
+  const cell = document.createElement('div');
+  cell.className = 'cell hdr';
+  return cell;
 }
 
 function applyHighlight(){
-  document.getElementById('summaryBtn').style.display = summaryTarget() ? 'inline-block' : 'none';
   document.querySelectorAll('#grid .hl-row,#grid .hl-col,#grid .hl-cell')
     .forEach(el=>el.classList.remove('hl-row','hl-col','hl-cell'));
   if(selR===null && selC===null) return;
+  // Excel-style: a single selected cell (both selR and selC set) only tints
+  // its row/column headers, not the whole row/column body — the cell itself
+  // gets the outline instead.
+  const cellSelected = selR!==null && selC!==null;
   document.querySelectorAll('#grid [data-r],#grid [data-c]').forEach(el=>{
     const r = el.dataset.r!==undefined ? parseInt(el.dataset.r) : null;
     const c = el.dataset.c!==undefined ? parseInt(el.dataset.c) : null;
-    if(selR!==null && r===selR) el.classList.add('hl-row');
-    if(selC!==null && c===selC) el.classList.add('hl-col');
-    if(selR!==null && selC!==null && r===selR && c===selC) el.classList.add('hl-cell');
+    const isHeader = r===null || c===null;
+    if(selR!==null && r===selR && (isHeader || !cellSelected)) el.classList.add('hl-row');
+    if(selC!==null && c===selC && (isHeader || !cellSelected)) el.classList.add('hl-col');
+    if(cellSelected && r===selR && c===selC) el.classList.add('hl-cell');
   });
-}
-
-function renderBars(container, items){
-  const max = Math.max(...items.map(i=>i.count), 1);
-  container.innerHTML = items.map(i => `
-    <div class="hist-row">
-      <span class="hist-label" title="${escapeHtml(i.label)}">${escapeHtml(i.label)}</span>
-      <span class="hist-bar-wrap"><span class="hist-bar" style="width:${(i.count/max*100).toFixed(1)}%"></span></span>
-      <span class="hist-count">${i.count}</span>
-    </div>`).join('');
-}
-
-async function openSummary(){
-  const target = summaryTarget();
-  if(!target) return;
-  const s = await target.fetch();
-  document.getElementById('metaTitle').textContent = `Summary — ${target.label}`;
-
-  const stats = s.kind==='numeric'
-    ? {
-        count: s.nonzero!==undefined
-          ? `${s.nonzero} / ${s.n} nonzero (${s.sparsity}% zero)`
-          : `${s.n - s.missing} / ${s.n} present (${s.missing} missing)`,
-        sum: s.sum===null ? null : fmtNum(s.sum),
-        min: s.min===null ? null : fmtNum(s.min),
-        max: s.max===null ? null : fmtNum(s.max),
-        mean: s.mean===null ? null : fmtNum(s.mean),
-        median: s.median===null ? null : fmtNum(s.median),
-      }
-    : { total: s.n, missing: s.missing, 'distinct shown': s.top.length };
-
-  const rows = document.getElementById('metaRows');
-  rows.innerHTML = '';
-  Object.entries(stats).forEach(([k,v])=>{
-    if(v===null || v===undefined) return;
-    const dt = document.createElement('dt'); dt.textContent = k;
-    const dd = document.createElement('dd'); dd.textContent = v;
-    rows.append(dt, dd);
-  });
-
-  const extra = document.getElementById('summaryExtra');
-  if(s.kind==='numeric' && s.histogram.length){
-    extra.innerHTML = '<div class="sg-cap">Distribution</div><div class="hist"></div>';
-    renderBars(extra.querySelector('.hist'), s.histogram.map(b=>({label:`${fmtNum(b.lo)}–${fmtNum(b.hi)}`, count:b.count})));
-  } else if(s.kind==='categorical' && s.top.length){
-    extra.innerHTML = '<div class="sg-cap">Top values</div><div class="hist"></div>';
-    renderBars(extra.querySelector('.hist'), s.top.map(t=>({label:t.value, count:t.count})));
-    if(s.other_count) extra.innerHTML += `<div class="sr-more">+${s.other_count} other value(s)</div>`;
-  } else {
-    extra.innerHTML = '';
-  }
-
-  document.getElementById('metaOverlay').classList.add('open');
 }
 
 function openMeta(title, fields){
@@ -874,7 +892,6 @@ function openMeta(title, fields){
 }
 
 document.getElementById('metaBtn').onclick = ()=>{
-  document.getElementById('summaryExtra').innerHTML = '';
   openMeta('Table metadata', {
     table_id: meta.table_id,
     type: meta.table_type,
@@ -882,7 +899,6 @@ document.getElementById('metaBtn').onclick = ()=>{
     create_date: meta.create_date,
   });
 };
-document.getElementById('summaryBtn').onclick = openSummary;
 document.getElementById('metaClose').onclick = ()=>document.getElementById('metaOverlay').classList.remove('open');
 document.getElementById('metaOverlay').addEventListener('click', (e)=>{
   if(e.target.id === 'metaOverlay') e.currentTarget.classList.remove('open');
