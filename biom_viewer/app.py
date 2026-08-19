@@ -872,7 +872,16 @@ async function render(){
   document.getElementById('colPrev').disabled = colPage===0;
   document.getElementById('colNext').disabled = c1>=colsTotal();
 
-  const data = mode==='data' ? await window.pywebview.api.data_window(r0, r1, c0, c1) : null;
+  let data = null;
+  if(mode==='data'){
+    if(visObs || visSample){
+      const rowIdxs = []; for(let i=r0;i<r1;i++) rowIdxs.push(obsAt(i));
+      const colIdxs = []; for(let j=c0;j<c1;j++) colIdxs.push(sampleAt(j));
+      data = await window.pywebview.api.data_window_idx(rowIdxs, colIdxs);
+    } else {
+      data = await window.pywebview.api.data_window(r0, r1, c0, c1);
+    }
+  }
 
   // Stretch to fill availH x availW, but never past the auto-fit page size —
   // a partial last page keeps normal-height rows instead of ballooning.
@@ -1009,7 +1018,7 @@ function fmtNum(v){ return Number.isInteger(v) ? String(v) : v.toFixed(2); }
 function colStatsFetch(j){
   return mode==='row'
     ? window.pywebview.api.field_summary('observation', rowFields[j])
-    : window.pywebview.api.col_summary(j);
+    : window.pywebview.api.col_summary(sampleAt(j));
 }
 
 function miniHist(histogram){
