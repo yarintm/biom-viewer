@@ -312,7 +312,7 @@ PAGE = """<!doctype html>
   #metaModal .empty{padding:0 14px 14px;color:var(--dim);font-size:12.5px}
   .stat-cell,.rh-stats{background:var(--panel-bg);color:var(--dim);font-size:calc(var(--fs)*0.9);line-height:1.35;
              padding:4px 6px;display:flex;flex-direction:column;gap:3px;overflow:hidden;cursor:pointer;min-height:0}
-  .rh-stats{white-space:normal;background:var(--row-meta-bg)}
+  .rh-stats{white-space:normal}
   .rh-stats .rh-label{font-size:var(--fs);font-weight:700;color:var(--row-meta);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .stat-line{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .stat-line b{color:var(--fg);font-weight:600}
