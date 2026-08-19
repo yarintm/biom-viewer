@@ -318,7 +318,10 @@ PAGE = """<!doctype html>
   .stat-cell,.rh-stats{background:var(--panel-bg);color:var(--dim);font-size:calc(var(--fs)*0.9);line-height:1.35;
              padding:4px 6px;display:flex;flex-direction:column;gap:3px;overflow:hidden;cursor:pointer;min-height:0}
   .rh-stats{white-space:normal}
-  .rh-stats .rh-label{font-size:var(--fs);font-weight:700;color:var(--fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .rh-stats:hover{background:var(--panel-bg)}
+  .rh-stats .rh-label{font-size:var(--fs);font-weight:700;color:var(--hdr-fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+             background:var(--hdr-bg);margin:-4px -6px 4px;padding:4px 6px;cursor:pointer}
+  .rh-stats .rh-label:hover{background:var(--input-border)}
   .stat-line{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .stat-line b{color:var(--fg);font-weight:600}
   .stat-bars{display:flex;align-items:flex-end;gap:1px;height:calc(var(--fs)*1.8);margin:1px 0}
