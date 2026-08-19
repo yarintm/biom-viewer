@@ -9,6 +9,45 @@ import webview
 TABLE = None
 FILENAME = ""
 
+
+def _histogram(values, buckets=10):
+    lo, hi = min(values), max(values)
+    if lo == hi:
+        return [{"lo": lo, "hi": hi, "count": len(values)}]
+    width = (hi - lo) / buckets
+    counts = [0] * buckets
+    for v in values:
+        idx = int((v - lo) / width)
+        if idx == buckets:
+            idx -= 1
+        counts[idx] += 1
+    return [
+        {"lo": lo + i * width, "hi": lo + (i + 1) * width, "count": counts[i]}
+        for i in range(buckets)
+    ]
+
+
+def _numeric_summary(values, total):
+    n = len(values)
+    if n == 0:
+        return {
+            "kind": "numeric", "n": total, "sum": None, "min": None,
+            "max": None, "mean": None, "median": None, "histogram": [],
+        }
+    s = sorted(values)
+    mid = n // 2
+    median = s[mid] if n % 2 else (s[mid - 1] + s[mid]) / 2
+    return {
+        "kind": "numeric",
+        "n": total,
+        "sum": sum(values),
+        "min": min(values),
+        "max": max(values),
+        "mean": sum(values) / n,
+        "median": median,
+        "histogram": _histogram(values, buckets=10),
+    }
+
 # ponytail: whole id list sent once (text-only, cheap even at ~1e5 rows); paginate if a table
 # ever has >~500k ids and this becomes a multi-MB response.
 def meta():

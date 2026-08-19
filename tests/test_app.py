@@ -2,6 +2,7 @@ import numpy as np
 import biom
 
 from biom_viewer import app
+from biom_viewer.app import _histogram, _numeric_summary
 
 
 def make_table():
@@ -43,3 +44,37 @@ def test_data_window_clamps_out_of_range_bounds():
     app.TABLE = make_table()
     # r1/c1 past the table edge should clamp, not error
     assert app.data_window(2, 10, 0, 10) == [[0, 0, 0, 0]]
+
+
+def test_histogram_ten_equal_width_buckets():
+    buckets = _histogram([1.0, 2.0, 3.0, 4.0, 5.0])
+    assert len(buckets) == 10
+    assert buckets[0]["lo"] == 1.0
+    assert buckets[-1]["hi"] == 5.0
+    assert sum(b["count"] for b in buckets) == 5
+
+
+def test_histogram_single_value_returns_one_bucket():
+    buckets = _histogram([3.0, 3.0, 3.0])
+    assert buckets == [{"lo": 3.0, "hi": 3.0, "count": 3}]
+
+
+def test_numeric_summary_basic_stats():
+    s = _numeric_summary([2.0, 5.0], total=4)
+    assert s["kind"] == "numeric"
+    assert s["n"] == 4
+    assert s["sum"] == 7.0
+    assert s["min"] == 2.0
+    assert s["max"] == 5.0
+    assert s["mean"] == 3.5
+    assert s["median"] == 3.5
+    assert len(s["histogram"]) == 10
+    assert sum(b["count"] for b in s["histogram"]) == 2
+
+
+def test_numeric_summary_empty_values():
+    s = _numeric_summary([], total=3)
+    assert s == {
+        "kind": "numeric", "n": 3, "sum": None, "min": None,
+        "max": None, "mean": None, "median": None, "histogram": [],
+    }
