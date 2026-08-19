@@ -70,24 +70,30 @@ def data_window(r0, r1, c0, c1):
     return sub.toarray().tolist()
 
 
-def row_summary(r):
-    row = TABLE.matrix_data.tocsr()[r, :]
-    values = [float(v) for v in row.data if v != 0]
-    total = TABLE.shape[1]
+def _axis_summary(vec, total):
+    values = [float(v) for v in vec.data if v != 0]
     summary = _numeric_summary(values, total)
     summary["nonzero"] = len(values)
     summary["sparsity"] = round((total - len(values)) / total * 100, 1) if total else 0.0
     return summary
+
+
+def row_summary(r):
+    return _axis_summary(TABLE.matrix_data.tocsr()[r, :], TABLE.shape[1])
+
+
+_csc_cache = {"table": None, "matrix": None}
+
+
+def _csc():
+    if _csc_cache["table"] is not TABLE:
+        _csc_cache["table"] = TABLE
+        _csc_cache["matrix"] = TABLE.matrix_data.tocsc()
+    return _csc_cache["matrix"]
 
 
 def col_summary(c):
-    col = TABLE.matrix_data.tocsc()[:, c]
-    values = [float(v) for v in col.data if v != 0]
-    total = TABLE.shape[0]
-    summary = _numeric_summary(values, total)
-    summary["nonzero"] = len(values)
-    summary["sparsity"] = round((total - len(values)) / total * 100, 1) if total else 0.0
-    return summary
+    return _axis_summary(_csc()[:, c], TABLE.shape[0])
 
 
 class Api:
