@@ -162,3 +162,22 @@ def test_field_summary_numeric_field_treats_nan_as_missing():
     assert s["min"] == 2.0
     assert s["max"] == 11.0
     assert sum(b["count"] for b in s["histogram"]) == 10
+
+
+def test_field_summary_numeric_field_treats_na_string_as_missing():
+    # Real-world exports (e.g. clinical metadata TSVs) commonly spell missing
+    # numeric values as the literal string "NA" rather than leaving them
+    # empty or using a float NaN. A handful of these shouldn't downgrade an
+    # otherwise-numeric field to categorical.
+    table = make_table_with_sample_metadata()
+    meta = table.metadata(axis="sample")
+    meta[1]["ph"] = "NA"  # was 1.0
+    meta[2]["ph"] = "n/a"  # was 2.0
+    app.TABLE = table
+    s = app.field_summary("sample", "ph")
+    assert s["kind"] == "numeric"
+    assert s["n"] == 12
+    assert s["missing"] == 3  # the original None plus "NA" and "n/a"
+    assert s["min"] == 3.0
+    assert s["max"] == 11.0
+    assert sum(b["count"] for b in s["histogram"]) == 9

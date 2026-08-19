@@ -134,14 +134,28 @@ def _is_numeric(v):
     return False
 
 
+# Common missing-value conventions in exported clinical/bio metadata. A field
+# that's otherwise all numbers shouldn't get downgraded to categorical just
+# because a handful of rows spell "missing" as text instead of leaving it
+# empty — these are excluded from `present` the same way None/""/NaN are.
+_MISSING_TOKENS = {"na", "n/a", "nan", "null", "none", "-"}
+
+
+def _is_missing(v):
+    if v is None or v == "":
+        return True
+    if isinstance(v, float) and not math.isfinite(v):
+        return True
+    if isinstance(v, str) and v.strip().lower() in _MISSING_TOKENS:
+        return True
+    return False
+
+
 def field_summary(axis, field):
     entries = TABLE.metadata(axis=axis)
     total = len(entries)
     raw = [(dict(e) if e else {}).get(field) for e in entries]
-    present = [
-        v for v in raw
-        if v is not None and v != "" and not (isinstance(v, float) and not math.isfinite(v))
-    ]
+    present = [v for v in raw if not _is_missing(v)]
     missing = total - len(present)
 
     if present and all(_is_numeric(v) for v in present):
