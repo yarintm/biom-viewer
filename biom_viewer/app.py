@@ -509,6 +509,24 @@ function computeFit(){
 
 let mode='data'; // 'data' | 'row' (observation metadata) | 'col' (sample metadata)
 let rowFields=[], colFields=[];
+
+// Sort/filter state lives per underlying axis identity (observation, sample),
+// not per mode -- a filter set while viewing row-metadata mode still applies
+// to the same axis's rows in data mode. `field_summary`'s numeric/categorical
+// detection is reused for filter input type; see fieldIsNumeric().
+let axisState = {
+  observation: { sortField: null, sortDir: 0, filters: [] }, // sortDir: 0=off, 1=asc, -1=desc
+  sample: { sortField: null, sortDir: 0, filters: [] },
+};
+// filters entries: {field, kind:'numeric', min, max} or {field, kind:'categorical', text}
+
+// Computed visible-index arrays. null = identity (no active sort/filter for
+// that axis) -- the common case stays on the cheap contiguous data_window path.
+let visObs = null, visSample = null;
+
+function obsAt(i){ return visObs ? visObs[i] : i; }
+function sampleAt(j){ return visSample ? visSample[j] : j; }
+
 const modeBtns = [...document.querySelectorAll('#modeGroup button')];
 
 function setMode(m){
@@ -555,10 +573,10 @@ function pageBounds(page, perPage, total){
 // axis (observation ids) stays exactly as in 'data' mode.
 // 'col' mode only swaps the ROW axis (fields replace observations); the
 // column axis (sample ids) stays exactly as in 'data' mode.
-function rowsTotal(){ return mode==='col' ? colFields.length : meta.rows; }
-function colsTotal(){ return mode==='row' ? rowFields.length : meta.cols; }
-function rowLabel(i){ return mode==='col' ? colFields[i] : meta.row_ids[i]; }
-function colLabel(j){ return mode==='row' ? rowFields[j] : meta.col_ids[j]; }
+function rowsTotal(){ return mode==='col' ? colFields.length : (visObs ? visObs.length : meta.rows); }
+function colsTotal(){ return mode==='row' ? rowFields.length : (visSample ? visSample.length : meta.cols); }
+function rowLabel(i){ return mode==='col' ? colFields[i] : meta.row_ids[obsAt(i)]; }
+function colLabel(j){ return mode==='row' ? rowFields[j] : meta.col_ids[sampleAt(j)]; }
 
 function formatMetaValue(v){
   if(Array.isArray(v)) v = v.length ? v.join(', ') : null;
@@ -570,13 +588,63 @@ function formatMetaValue(v){
 function metaCellAt(i, j){
   // i = row index (grid row), j = col index (grid col)
   if(mode==='row'){
-    // row axis = observation i (unchanged), col axis = field j
-    const entry = meta.row_metadata && meta.row_metadata[i];
+    // row axis = observation obsAt(i), col axis = field j (fields unaffected by filters)
+    const entry = meta.row_metadata && meta.row_metadata[obsAt(i)];
     return entry ? entry[rowFields[j]] : null;
   }
-  // mode==='col': row axis = field i, col axis = sample j (unchanged)
-  const entry = meta.col_metadata && meta.col_metadata[j];
+  // mode==='col': row axis = field i (unaffected), col axis = sample sampleAt(j)
+  const entry = meta.col_metadata && meta.col_metadata[sampleAt(j)];
   return entry ? entry[colFields[i]] : null;
+}
+
+function fieldIsNumeric(axis, field){
+  const entries = axis==='observation' ? meta.row_metadata : meta.col_metadata;
+  const present = (entries||[]).map(e=>e && e[field]).filter(v=>v!==null && v!==undefined && v!=='');
+  if(!present.length) return false;
+  return present.every(v=>typeof v==='number' || (typeof v==='string' && v.trim()!=='' && !isNaN(Number(v))));
+}
+
+// Recompute visObs/visSample from current axisState. Called whenever a sort
+// or filter changes. Leaves the axis untouched (null) if nothing is active,
+// keeping the cheap contiguous fetch path for the common case.
+function recomputeVisible(axis){
+  const state = axisState[axis];
+  const entries = axis==='observation' ? meta.row_metadata : meta.col_metadata;
+  const total = axis==='observation' ? meta.rows : meta.cols;
+  const active = state.filters.length>0 || state.sortDir!==0;
+  let result = null;
+  if(active){
+    let idxs = [];
+    for(let i=0;i<total;i++) idxs.push(i);
+    state.filters.forEach(f=>{
+      idxs = idxs.filter(i=>{
+        const entry = entries && entries[i];
+        const v = entry ? entry[f.field] : null;
+        if(v===null || v===undefined || v==='') return false;
+        if(f.kind==='numeric'){
+          const n = Number(v);
+          if(f.min!==null && n<f.min) return false;
+          if(f.max!==null && n>f.max) return false;
+          return true;
+        }
+        return String(v).toLowerCase().includes(f.text.toLowerCase());
+      });
+    });
+    if(state.sortDir!==0){
+      const field = state.sortField;
+      const numeric = fieldIsNumeric(axis, field);
+      idxs = idxs.slice().sort((a,b)=>{
+        const va = entries[a] ? entries[a][field] : null;
+        const vb = entries[b] ? entries[b][field] : null;
+        let cmp;
+        if(numeric) cmp = Number(va) - Number(vb);
+        else cmp = String(va).localeCompare(String(vb));
+        return state.sortDir * cmp;
+      });
+    }
+    result = idxs;
+  }
+  if(axis==='observation') visObs = result; else visSample = result;
 }
 
 // --- search ---------------------------------------------------------------
