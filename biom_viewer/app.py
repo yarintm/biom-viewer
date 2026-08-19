@@ -597,9 +597,14 @@ function metaCellAt(i, j){
   return entry ? entry[colFields[i]] : null;
 }
 
+// Missing-value tokens, mirrored from the backend's _MISSING_TOKENS
+// (field_summary) so a field the backend treats as numeric-with-some-NAs
+// doesn't get misclassified as categorical here just because "NA" isn't a JS number.
+const MISSING_TOKENS = new Set(['na', 'n/a', 'nan', 'null', 'none', '-']);
 function fieldIsNumeric(axis, field){
   const entries = axis==='observation' ? meta.row_metadata : meta.col_metadata;
-  const present = (entries||[]).map(e=>e && e[field]).filter(v=>v!==null && v!==undefined && v!=='');
+  const present = (entries||[]).map(e=>e && e[field])
+    .filter(v=>v!==null && v!==undefined && v!=='' && !(typeof v==='string' && MISSING_TOKENS.has(v.trim().toLowerCase())));
   if(!present.length) return false;
   return present.every(v=>typeof v==='number' || (typeof v==='string' && v.trim()!=='' && !isNaN(Number(v))));
 }
@@ -621,6 +626,7 @@ function recomputeVisible(axis){
         const entry = entries && entries[i];
         const v = entry ? entry[f.field] : null;
         if(v===null || v===undefined || v==='') return false;
+        if(typeof v==='string' && MISSING_TOKENS.has(v.trim().toLowerCase())) return false;
         if(f.kind==='numeric'){
           const n = Number(v);
           if(f.min!==null && n<f.min) return false;
