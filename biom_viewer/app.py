@@ -770,7 +770,26 @@ function showSelected(text){
   showSelected._t = setTimeout(()=>inp.classList.remove('flash'), 700);
 }
 
+function fmtNum(v){ return Number.isInteger(v) ? String(v) : v.toFixed(2); }
+
+// Returns null if no exactly-one-axis selection exists (nothing selected, or
+// a specific cell with both selR and selC set). Otherwise returns the label
+// to show and a fetch() that calls the matching backend summary method.
+function summaryTarget(){
+  if(selR!==null && selC!==null) return null;
+  if(selR!==null){
+    if(mode==='col') return {label: colFields[selR], fetch: ()=>window.pywebview.api.field_summary('sample', colFields[selR])};
+    return {label: rowLabel(selR), fetch: ()=>window.pywebview.api.row_summary(selR)};
+  }
+  if(selC!==null){
+    if(mode==='row') return {label: rowFields[selC], fetch: ()=>window.pywebview.api.field_summary('observation', rowFields[selC])};
+    return {label: colLabel(selC), fetch: ()=>window.pywebview.api.col_summary(selC)};
+  }
+  return null;
+}
+
 function applyHighlight(){
+  document.getElementById('summaryBtn').style.display = summaryTarget() ? 'inline-block' : 'none';
   document.querySelectorAll('#grid .hl-row,#grid .hl-col,#grid .hl-cell')
     .forEach(el=>el.classList.remove('hl-row','hl-col','hl-cell'));
   if(selR===null && selC===null) return;
@@ -781,6 +800,59 @@ function applyHighlight(){
     if(selC!==null && c===selC) el.classList.add('hl-col');
     if(selR!==null && selC!==null && r===selR && c===selC) el.classList.add('hl-cell');
   });
+}
+
+function renderBars(container, items){
+  const max = Math.max(...items.map(i=>i.count), 1);
+  container.innerHTML = items.map(i => `
+    <div class="hist-row">
+      <span class="hist-label" title="${escapeHtml(i.label)}">${escapeHtml(i.label)}</span>
+      <span class="hist-bar-wrap"><span class="hist-bar" style="width:${(i.count/max*100).toFixed(1)}%"></span></span>
+      <span class="hist-count">${i.count}</span>
+    </div>`).join('');
+}
+
+async function openSummary(){
+  const target = summaryTarget();
+  if(!target) return;
+  const s = await target.fetch();
+  document.getElementById('metaTitle').textContent = `Summary — ${target.label}`;
+
+  const stats = s.kind==='numeric'
+    ? {
+        count: s.nonzero!==undefined
+          ? `${s.nonzero} / ${s.n} nonzero (${s.sparsity}% zero)`
+          : `${s.n - s.missing} / ${s.n} present (${s.missing} missing)`,
+        sum: s.sum===null ? null : fmtNum(s.sum),
+        min: s.min===null ? null : fmtNum(s.min),
+        max: s.max===null ? null : fmtNum(s.max),
+        mean: s.mean===null ? null : fmtNum(s.mean),
+        median: s.median===null ? null : fmtNum(s.median),
+      }
+    : { total: s.n, missing: s.missing, 'distinct shown': s.top.length };
+
+  const rows = document.getElementById('metaRows');
+  rows.innerHTML = '';
+  Object.entries(stats).forEach(([k,v])=>{
+    if(v===null || v===undefined) return;
+    const dt = document.createElement('dt'); dt.textContent = k;
+    const dd = document.createElement('dd'); dd.textContent = v;
+    rows.append(dt, dd);
+  });
+
+  const extra = document.getElementById('summaryExtra');
+  if(s.kind==='numeric' && s.histogram.length){
+    extra.innerHTML = '<div class="sg-cap">Distribution</div><div class="hist"></div>';
+    renderBars(extra.querySelector('.hist'), s.histogram.map(b=>({label:`${fmtNum(b.lo)}–${fmtNum(b.hi)}`, count:b.count})));
+  } else if(s.kind==='categorical' && s.top.length){
+    extra.innerHTML = '<div class="sg-cap">Top values</div><div class="hist"></div>';
+    renderBars(extra.querySelector('.hist'), s.top.map(t=>({label:t.value, count:t.count})));
+    if(s.other_count) extra.innerHTML += `<div class="sr-more">+${s.other_count} other value(s)</div>`;
+  } else {
+    extra.innerHTML = '';
+  }
+
+  document.getElementById('metaOverlay').classList.add('open');
 }
 
 function openMeta(title, fields){
@@ -802,6 +874,7 @@ function openMeta(title, fields){
 }
 
 document.getElementById('metaBtn').onclick = ()=>{
+  document.getElementById('summaryExtra').innerHTML = '';
   openMeta('Table metadata', {
     table_id: meta.table_id,
     type: meta.table_type,
@@ -809,6 +882,7 @@ document.getElementById('metaBtn').onclick = ()=>{
     create_date: meta.create_date,
   });
 };
+document.getElementById('summaryBtn').onclick = openSummary;
 document.getElementById('metaClose').onclick = ()=>document.getElementById('metaOverlay').classList.remove('open');
 document.getElementById('metaOverlay').addEventListener('click', (e)=>{
   if(e.target.id === 'metaOverlay') e.currentTarget.classList.remove('open');
