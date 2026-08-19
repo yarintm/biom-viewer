@@ -274,8 +274,8 @@ PAGE = """<!doctype html>
   .nz{background:var(--nz-bg)}
   .mv{color:var(--fg)}
   .mv-empty{color:var(--z-fg);font-style:italic}
-  .hl-row,.hl-col{background:var(--hl) !important}
-  .rh.hl-row,.colhdr.hl-col{background:inherit !important;box-shadow:inset 0 0 0 2px var(--sel-outline);font-weight:700}
+  .cell:not(.rh):not(.colhdr).hl-row,.cell:not(.rh):not(.colhdr).hl-col{background:var(--hl) !important}
+  .rh.hl-row,.colhdr.hl-col{box-shadow:inset 0 0 0 2px var(--sel-outline);font-weight:700}
   .hl-cell{outline:2px solid var(--sel-outline);outline-offset:-2px;position:relative;z-index:1}
   /* row axis (observation ids, leftmost column) orange; col axis (sample ids,
      top row) blue — in data mode both are on screen at once */
@@ -296,11 +296,13 @@ PAGE = """<!doctype html>
   #metaModal .rows dt{color:var(--dim);white-space:nowrap}
   #metaModal .rows dd{margin:0;font-family:ui-monospace,monospace;word-break:break-word}
   #metaModal .empty{padding:0 14px 14px;color:var(--dim);font-size:12.5px}
-  .stat-cell{background:var(--panel-bg);color:var(--dim);font-size:9.5px;line-height:1.35;
-             padding:4px 6px;display:flex;flex-direction:column;gap:2px;overflow:hidden;cursor:default}
+  .stat-cell,.rh-stats{background:var(--panel-bg);color:var(--dim);font-size:calc(var(--fs)*0.9);line-height:1.35;
+             padding:4px 6px;display:flex;flex-direction:column;gap:2px;overflow:hidden;cursor:pointer}
+  .rh-stats{white-space:normal;background:var(--row-meta-bg)}
+  .rh-stats .rh-label{font-size:var(--fs);font-weight:700;color:var(--row-meta);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .stat-line{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .stat-line b{color:var(--fg);font-weight:600}
-  .stat-bars{display:flex;align-items:flex-end;gap:1px;height:20px;margin:1px 0}
+  .stat-bars{display:flex;align-items:flex-end;gap:1px;height:calc(var(--fs)*1.8);margin:1px 0}
   .stat-bars .bar{flex:1;background:var(--accent);border-radius:1px;min-height:2px}
   .stat-top-row{position:relative;padding:1px 3px;border-radius:2px;overflow:hidden;display:flex;
                 align-items:center;justify-content:space-between;gap:4px}
@@ -367,23 +369,30 @@ let availH=0, availW=0;
 let summaryVisible=false;
 const GAP=14;
 const COLW_TARGET=130, RHW=240;
-// Column stats get their own row (fixed height, independent of the data row
-// height). Row stats have no such home: each row header is only one grid
-// row tall (~22-30px), nowhere near enough to fit a 3-line stat block — so
-// unlike Data Wrangler (whose columns *are* the only axis it summarizes),
-// this app only summarizes the column axis inline, never the row axis.
-const STAT_ROW_H=92;
 function rowsPerPage(){ return autoRows; }
 function colsPerPage(){ return autoCols; }
+
+// The stats strip's row-track height. Scales with fontSize (like everything
+// else driven by the A+/A- buttons) so it never clips as text grows.
+function statRowH(){ return Math.round(fontSize*7) + 15; }
+
+// The metadata *fields* — the axis actually worth summarizing — sit on the
+// row axis in 'col' mode (colFields) and the column axis everywhere else
+// (data mode's samples, or 'row' mode's rowFields). Only 'col' mode's field
+// list is what gets summarized on the row side, because it's the only case
+// where the row axis is small (bounded by field count, not by taxa/sample
+// count) — tall rows are only affordable there.
+function stripOnRows(){ return summaryVisible && mode==='col'; }
+function stripOnCols(){ return summaryVisible && mode!=='col'; }
 
 function computeFit(){
   // Derived from the font, never measured off a rendered cell: cell height is
   // set by the grid track we compute here, so measuring it feeds back and can
   // collapse the page to 2 giant rows after a partial page.
-  const rowHTarget = Math.round(fontSize*1.3) + 8; // 3px padding + 1px border, top and bottom
+  const rowHTarget = stripOnRows() ? statRowH() : Math.round(fontSize*1.3) + 8; // 3px padding + 1px border, top and bottom
   const mainRect = document.getElementById('main').getBoundingClientRect();
   const colNavH = document.getElementById('colNav').getBoundingClientRect().height;
-  availH = mainRect.height - colNavH - GAP - (summaryVisible ? STAT_ROW_H : 0);
+  availH = mainRect.height - colNavH - GAP - (stripOnCols() ? statRowH() : 0);
   availW = mainRect.width - RHW - GAP;
 
   const totalRowsTarget = Math.max(2, Math.floor(availH/rowHTarget)); // includes header row
@@ -691,14 +700,17 @@ async function render(){
   rowHPx = availH/(Math.max(renderedRows, rowsPerPage())+1);
   colWPx = availW/renderedCols;
 
-  // Fetch stats for every visible column up front, in parallel, so the grid
-  // below can be built synchronously once everything has arrived.
-  const colStats = summaryVisible
+  // Fetch stats for every visible row/column up front, in parallel, so the
+  // grid below can be built synchronously once everything has arrived.
+  const colStats = stripOnCols()
     ? await Promise.all(Array.from({length: renderedCols}, (_, k) => colStatsFetch(c0+k)))
+    : null;
+  const rowStats = stripOnRows()
+    ? await Promise.all(Array.from({length: renderedRows}, (_, k) => window.pywebview.api.field_summary('sample', colFields[r0+k])))
     : null;
 
   const grid = document.getElementById('grid');
-  const statRowTrack = summaryVisible ? `${STAT_ROW_H}px ` : '';
+  const statRowTrack = stripOnCols() ? `${statRowH()}px ` : '';
   grid.style.gridTemplateColumns = `${RHW}px repeat(${renderedCols}, ${colWPx}px)`;
   grid.style.gridTemplateRows = `${rowHPx}px ${statRowTrack}repeat(${renderedRows}, ${rowHPx}px)`;
   grid.innerHTML = '';
@@ -721,7 +733,7 @@ async function render(){
     h.addEventListener('dblclick', ()=>{ summaryVisible = !summaryVisible; render(); });
     grid.appendChild(h);
   }
-  if(summaryVisible){
+  if(stripOnCols()){
     grid.appendChild(fillerCell());
     colStats.forEach(s => grid.appendChild(statCell(s)));
   }
@@ -729,7 +741,12 @@ async function render(){
     const label = rowLabel(r);
     const rh = document.createElement('div');
     rh.className = 'cell rh';
-    rh.textContent = label;
+    if(stripOnRows()){
+      rh.classList.add('rh-stats');
+      rh.innerHTML = `<div class="stat-line rh-label">${escapeHtml(label)}</div>` + statCellHtml(rowStats[r-r0]);
+    } else {
+      rh.textContent = label;
+    }
     rh.title = label;
     rh.dataset.r = r;
     rh.addEventListener('click', ()=>{
