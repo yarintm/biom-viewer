@@ -290,6 +290,11 @@ PAGE = """<!doctype html>
   .mv-empty{color:var(--z-fg);font-style:italic}
   .cell:not(.rh):not(.colhdr).hl-row,.cell:not(.rh):not(.colhdr).hl-col{background:var(--hl) !important}
   .rh.hl-row,.colhdr.hl-col{box-shadow:inset 0 0 0 2px var(--sel-outline);font-weight:700}
+  /* Plain .rh headers keep their own axis-color background under selection
+     (border-only, no fill) — but .rh-stats is a combined header+stats block,
+     not just a label, so it should fill solid like every other selected
+     cell instead of leaving all that stats text sitting on a bare border. */
+  .rh-stats.hl-row{background:var(--hl) !important}
   .hl-cell{outline:2px solid var(--sel-outline);outline-offset:-2px;position:relative;z-index:1}
   /* row axis (observation ids, leftmost column) orange; col axis (sample ids,
      top row) blue — in data mode both are on screen at once */
