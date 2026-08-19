@@ -212,7 +212,7 @@ PAGE = """<!doctype html>
     --cell-border:light-dark(#ddd,#333); --hdr-bg:light-dark(#e8e8e8,#252525);
     --hdr-fg:light-dark(#333,#aaa);
     --nz-bg:light-dark(#bfe8d3,#274b3a); --z-fg:light-dark(#aaa,#666);
-    --hl:light-dark(#cfe0ff,#3a3a55); --sel-outline:light-dark(#2266cc,#6cf);
+    --hl:light-dark(#cfe0ff,#3a3a55); --sel-outline:var(--accent);
     --fs:11px;
     --row-meta:light-dark(#c96a1a,#e08a3c); --row-meta-bg:light-dark(#fde3c8,#4a3420);
     --row-meta-fg:light-dark(#5c3410,#2a1c0f);
@@ -322,13 +322,17 @@ PAGE = """<!doctype html>
   .rh-stats .rh-label{font-size:var(--fs);font-weight:700;color:var(--hdr-fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
              background:var(--hdr-bg);margin:-4px -6px 4px;padding:4px 6px;cursor:pointer}
   .rh-stats .rh-label:hover{background:var(--input-border)}
+  /* The label bar's own opaque background paints over the parent cell's
+     top edge, hiding the selection border there -- redraw just that edge
+     on the label itself so the border reads as continuous when selected. */
+  .rh-stats.hl-row .rh-label{box-shadow:inset 0 2px 0 var(--sel-outline)}
   .stat-line{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .stat-line b{color:var(--fg);font-weight:600}
   .stat-bars{display:flex;align-items:flex-end;gap:1px;height:calc(var(--fs)*1.8);margin:1px 0}
   .stat-bars .bar{flex:1;background:var(--accent);border-radius:1px;min-height:2px}
   .stat-top-row{position:relative;padding:1px 3px;border-radius:2px;overflow:hidden;display:flex;
                 align-items:center;justify-content:space-between;gap:4px}
-  .stat-top-row .fill{position:absolute;inset:0;background:var(--hl);z-index:0}
+  .stat-top-row .fill{position:absolute;inset:0;background:var(--nz-bg);z-index:0}
   .stat-top-row .lbl,.stat-top-row .pct{position:relative;z-index:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .stat-top-row .pct{flex-shrink:0;font-family:ui-monospace,monospace}
 </style></head>
@@ -427,14 +431,21 @@ function computeFit(){
   // Derived from the font, never measured off a rendered cell: cell height is
   // set by the grid track we compute here, so measuring it feeds back and can
   // collapse the page to 2 giant rows after a partial page.
-  const rowHTarget = stripOnRows() ? statRowH() : Math.round(fontSize*1.3) + 8; // 3px padding + 1px border, top and bottom
+  const shortRowH = Math.round(fontSize*1.3) + 8; // 3px padding + 1px border, top and bottom
   const mainRect = document.getElementById('main').getBoundingClientRect();
   const colNavH = document.getElementById('colNav').getBoundingClientRect().height;
   availH = mainRect.height - colNavH - GAP - (stripOnCols() ? statRowH() : 0);
   availW = mainRect.width - RHW - GAP;
 
-  const totalRowsTarget = Math.max(2, Math.floor(availH/rowHTarget)); // includes header row
-  autoRows = totalRowsTarget - 1;
+  if(stripOnRows()){
+    // The column-header row stays short (it's just sample/observation ids,
+    // same as ever) -- only the field rows below it need the tall track,
+    // so only they should compete for the height budget.
+    autoRows = Math.max(1, Math.floor((availH - shortRowH) / statRowH()));
+  } else {
+    const totalRowsTarget = Math.max(2, Math.floor(availH/shortRowH)); // includes header row
+    autoRows = totalRowsTarget - 1;
+  }
 
   autoCols = Math.max(1, Math.floor(availW/COLW_TARGET));
 }
@@ -735,7 +746,16 @@ async function render(){
   // Stretch to fill availH x availW, but never past the auto-fit page size —
   // a partial last page keeps normal-height rows instead of ballooning.
   const renderedRows = r1-r0, renderedCols = c1-c0;
-  rowHPx = availH/(Math.max(renderedRows, rowsPerPage())+1);
+  let headerRowHPx;
+  if(stripOnRows()){
+    // Column headers stay short; only the field rows below need the tall
+    // track, so the header doesn't compete with them for height.
+    headerRowHPx = Math.round(fontSize*1.3) + 8;
+    rowHPx = (availH - headerRowHPx) / Math.max(renderedRows, rowsPerPage());
+  } else {
+    rowHPx = availH/(Math.max(renderedRows, rowsPerPage())+1);
+    headerRowHPx = rowHPx;
+  }
   colWPx = availW/renderedCols;
 
   // Fetch stats for every visible row/column up front, in parallel, so the
