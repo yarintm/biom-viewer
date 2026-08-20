@@ -1275,6 +1275,23 @@ function openFilterInput(axis, field, anchorEl){
     search.focus();
   }
 
+  // Clamp to the viewport now that the popover has real content/size --
+  // rect.bottom+4 alone can push a tall checklist off the bottom of the
+  // window (no scrollbar to reveal it, position:fixed just clips silently).
+  // Flip above the header if there's more room there than below.
+  const margin = 6;
+  const popRect = pop.getBoundingClientRect();
+  if(rect.bottom + 4 + popRect.height > window.innerHeight - margin){
+    const spaceAbove = rect.top - margin;
+    const spaceBelow = window.innerHeight - margin - (rect.bottom + 4);
+    pop.style.top = spaceAbove > spaceBelow
+      ? Math.max(margin, rect.top - popRect.height - 4) + 'px'
+      : (window.innerHeight - margin - popRect.height) + 'px';
+  }
+  if(rect.left + popRect.width > window.innerWidth - margin){
+    pop.style.left = Math.max(margin, window.innerWidth - margin - popRect.width) + 'px';
+  }
+
   const apply = ()=>{
     const filters = st.filters.filter(f=>f.field!==field);
     if(numeric){
