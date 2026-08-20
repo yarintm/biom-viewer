@@ -303,6 +303,13 @@ PAGE = """<!doctype html>
              padding:0 2px;line-height:1}
   .axis-ctl button:hover{color:var(--fg)}
   .axis-ctl button.on{color:var(--accent);font-weight:700}
+  #filterPopover{position:fixed;z-index:30;background:var(--panel-bg);border:1px solid var(--border);
+             border-radius:6px;box-shadow:0 8px 24px rgba(0,0,0,.3);padding:6px;display:flex;gap:4px;align-items:center}
+  #filterPopover input{width:70px;box-sizing:border-box;background:var(--input-bg);color:var(--fg);
+             border:1px solid var(--input-border);border-radius:4px;padding:3px 6px;font-size:12px}
+  #filterPopover input.fp-text{width:140px}
+  #filterPopover button{background:var(--panel-bg);color:var(--fg);border:1px solid var(--input-border);
+             border-radius:4px;padding:3px 8px;font-size:12px;cursor:pointer}
   .z{color:var(--z-fg)}
   .nz{background:var(--nz-bg)}
   .mv{color:var(--fg)}
@@ -1059,12 +1066,73 @@ function cycleSort(axis, field){
   renderAxisChips();
 }
 
-// Stubs — real implementations land in later tasks (openFilterInput: filter
-// popover; renderAxisChips: status chip strip). Minimal real no-op bodies,
-// not TODOs, so cycleSort above and the click delegation below both work
-// standalone right now without erroring.
-function openFilterInput(){}
+// Stub — real implementation lands in a later task (renderAxisChips: status
+// chip strip). Minimal real no-op body, not a TODO, so cycleSort above and
+// the click delegation below both work standalone right now without erroring.
 function renderAxisChips(){}
+
+function closeFilterPopover(){
+  const existing = document.getElementById('filterPopover');
+  if(existing) existing.remove();
+}
+
+function openFilterInput(axis, field, anchorEl){
+  closeFilterPopover();
+  const st = axisState[axis];
+  const existing = st.filters.find(f=>f.field===field);
+  const numeric = fieldIsNumeric(axis, field);
+  const pop = document.createElement('div');
+  pop.id = 'filterPopover';
+  const rect = anchorEl.getBoundingClientRect();
+  pop.style.left = rect.left + 'px';
+  pop.style.top = (rect.bottom + 4) + 'px';
+  if(numeric){
+    pop.innerHTML = `<input class="fp-min" type="number" placeholder="min" value="${existing?existing.min ?? '':''}">` +
+      `<input class="fp-max" type="number" placeholder="max" value="${existing?existing.max ?? '':''}">` +
+      `<button class="fp-apply">Apply</button>` +
+      (existing ? `<button class="fp-clear">Clear</button>` : '');
+  } else {
+    pop.innerHTML = `<input class="fp-text" type="text" placeholder="contains…" value="${existing?escapeHtml(existing.text):''}">` +
+      `<button class="fp-apply">Apply</button>` +
+      (existing ? `<button class="fp-clear">Clear</button>` : '');
+  }
+  document.body.appendChild(pop);
+  pop.querySelector(numeric ? '.fp-min' : '.fp-text').focus();
+
+  const apply = ()=>{
+    const filters = st.filters.filter(f=>f.field!==field);
+    if(numeric){
+      const minV = pop.querySelector('.fp-min').value;
+      const maxV = pop.querySelector('.fp-max').value;
+      filters.push({field, kind:'numeric', min: minV===''?null:Number(minV), max: maxV===''?null:Number(maxV)});
+    } else {
+      const text = pop.querySelector('.fp-text').value.trim();
+      if(text) filters.push({field, kind:'categorical', text});
+    }
+    st.filters = filters;
+    recomputeVisible(axis);
+    if(axis==='observation'){ rowPage=0; } else { colPage=0; }
+    closeFilterPopover();
+    render();
+    renderAxisChips();
+  };
+  pop.querySelector('.fp-apply').onclick = apply;
+  const clearBtn = pop.querySelector('.fp-clear');
+  if(clearBtn) clearBtn.onclick = ()=>{
+    st.filters = st.filters.filter(f=>f.field!==field);
+    recomputeVisible(axis);
+    if(axis==='observation'){ rowPage=0; } else { colPage=0; }
+    closeFilterPopover();
+    render();
+    renderAxisChips();
+  };
+  pop.addEventListener('keydown', e=>{ if(e.key==='Enter') apply(); if(e.key==='Escape') closeFilterPopover(); });
+}
+
+document.addEventListener('click', (e)=>{
+  const pop = document.getElementById('filterPopover');
+  if(pop && !pop.contains(e.target) && !e.target.closest('.axis-filter')) closeFilterPopover();
+});
 
 document.getElementById('grid').addEventListener('click', (e)=>{
   const sortBtn = e.target.closest('.axis-sort');
