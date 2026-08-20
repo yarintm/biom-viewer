@@ -547,6 +547,23 @@ let visObs = null, visSample = null;
 function obsAt(i){ return visObs ? visObs[i] : i; }
 function sampleAt(j){ return visSample ? visSample[j] : j; }
 
+// Search results carry a raw matrix index (jumpTo's entry.i/.fi). If that
+// axis has an active sort/filter, the raw index no longer equals its grid
+// position -- resolve it against the current visible order, or if the
+// target was filtered out entirely, clear that axis's sort/filter so the
+// jump always lands on the actual item rather than silently landing on
+// whatever else happens to sit at that raw position.
+function resolveAxisPosition(axis, rawIdx){
+  const vis = axis==='observation' ? visObs : visSample;
+  if(!vis) return rawIdx;
+  const pos = vis.indexOf(rawIdx);
+  if(pos>=0) return pos;
+  axisState[axis] = { sortField: null, sortDir: 0, filters: [] };
+  recomputeVisible(axis);
+  renderAxisChips();
+  return rawIdx;
+}
+
 const modeBtns = [...document.querySelectorAll('#modeGroup button')];
 
 function setMode(m){
@@ -849,12 +866,14 @@ async function jumpTo(entry){
   document.getElementById('searchBox').blur();
   if(entry.type==='sample'){
     setMode('data');
-    colPage = Math.floor(entry.i / colsPerPage());
-    selR = null; selC = entry.i;
+    const pos = resolveAxisPosition('sample', entry.i);
+    colPage = Math.floor(pos / colsPerPage());
+    selR = null; selC = pos;
   } else if(entry.type==='taxon'){
     setMode('data');
-    rowPage = Math.floor(entry.i / rowsPerPage());
-    selR = entry.i; selC = null;
+    const pos = resolveAxisPosition('observation', entry.i);
+    rowPage = Math.floor(pos / rowsPerPage());
+    selR = pos; selC = null;
   } else if(entry.type==='rowField'){
     setMode('row');
     colPage = Math.floor(entry.i / colsPerPage());
@@ -865,14 +884,16 @@ async function jumpTo(entry){
     selR = entry.i; selC = null;
   } else if(entry.type==='rowValue'){
     setMode('row');
-    rowPage = Math.floor(entry.i / rowsPerPage());
+    const pos = resolveAxisPosition('observation', entry.i);
+    rowPage = Math.floor(pos / rowsPerPage());
     colPage = Math.floor(entry.fi / colsPerPage());
-    selR = entry.i; selC = entry.fi;
+    selR = pos; selC = entry.fi;
   } else if(entry.type==='colValue'){
     setMode('col');
+    const pos = resolveAxisPosition('sample', entry.i);
     rowPage = Math.floor(entry.fi / rowsPerPage());
-    colPage = Math.floor(entry.i / colsPerPage());
-    selR = entry.fi; selC = entry.i;
+    colPage = Math.floor(pos / colsPerPage());
+    selR = entry.fi; selC = pos;
   }
   await render();
   const label = entry.type==='rowValue' ? `${entry.id}  |  ${entry.field}  =  ${entry.value}`
