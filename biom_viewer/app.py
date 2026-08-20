@@ -310,6 +310,11 @@ PAGE = """<!doctype html>
   #filterPopover input.fp-text{width:140px}
   #filterPopover button{background:var(--panel-bg);color:var(--fg);border:1px solid var(--input-border);
              border-radius:4px;padding:3px 8px;font-size:12px;cursor:pointer}
+  #axisChips{display:none;gap:6px;padding:4px 10px;flex-wrap:wrap}
+  .chip{display:inline-flex;align-items:center;gap:5px;background:var(--hl);color:var(--fg);
+             border-radius:10px;padding:3px 8px;font-size:11.5px}
+  .chip-x{background:none;border:none;color:var(--dim);cursor:pointer;font-size:10px;padding:0;line-height:1}
+  .chip-x:hover{color:var(--fg)}
   .z{color:var(--z-fg)}
   .nz{background:var(--nz-bg)}
   .mv{color:var(--fg)}
@@ -388,6 +393,7 @@ PAGE = """<!doctype html>
     <button class="tool" id="fontUp">A+</button>
   </span>
 </div>
+<div id="axisChips"></div>
 <input id="selected" readonly value="Click a row, column, or cell to see its full text here (auto-copied to clipboard). Double-click a header to toggle summary stats.">
 
 <div id="body">
@@ -571,6 +577,7 @@ async function loadMeta(){
       `${meta.filename}  —  ${meta.rows} rows x ${meta.cols} cols`;
     buildSearchIndex();
     render();
+    renderAxisChips();
   } catch(err){
     document.getElementById('filename').textContent = `Failed to load: ${err}`;
     console.error(err);
@@ -1066,10 +1073,33 @@ function cycleSort(axis, field){
   renderAxisChips();
 }
 
-// Stub — real implementation lands in a later task (renderAxisChips: status
-// chip strip). Minimal real no-op body, not a TODO, so cycleSort above and
-// the click delegation below both work standalone right now without erroring.
-function renderAxisChips(){}
+function axisChipLabel(axis){
+  const st = axisState[axis];
+  const parts = [];
+  if(st.filters.length) parts.push(`${st.filters.length} filter${st.filters.length>1?'s':''}`);
+  if(st.sortDir!==0) parts.push(`sorted by ${escapeHtml(st.sortField)} ${st.sortDir===1?'▲':'▼'}`);
+  return parts.join(' · ');
+}
+
+function clearAxis(axis){
+  axisState[axis] = { sortField: null, sortDir: 0, filters: [] };
+  recomputeVisible(axis);
+  if(axis==='observation'){ rowPage=0; } else { colPage=0; }
+  render();
+  renderAxisChips();
+}
+
+function renderAxisChips(){
+  const el = document.getElementById('axisChips');
+  const chips = ['observation','sample']
+    .filter(axis => axisState[axis].filters.length || axisState[axis].sortDir!==0)
+    .map(axis => `<span class="chip" data-axis="${axis}">${axis}: ${axisChipLabel(axis)} <button class="chip-x" data-axis="${axis}">✕</button></span>`);
+  el.innerHTML = chips.join('');
+  el.style.display = chips.length ? 'flex' : 'none';
+  el.querySelectorAll('.chip-x').forEach(btn=>{
+    btn.onclick = ()=>clearAxis(btn.dataset.axis);
+  });
+}
 
 function closeFilterPopover(){
   const existing = document.getElementById('filterPopover');
