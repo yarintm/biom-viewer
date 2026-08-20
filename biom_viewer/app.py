@@ -307,9 +307,19 @@ PAGE = """<!doctype html>
              border-radius:6px;box-shadow:0 8px 24px rgba(0,0,0,.3);padding:6px;display:flex;gap:4px;align-items:center}
   #filterPopover input{width:70px;box-sizing:border-box;background:var(--input-bg);color:var(--fg);
              border:1px solid var(--input-border);border-radius:4px;padding:3px 6px;font-size:12px}
-  #filterPopover input.fp-text{width:140px}
   #filterPopover button{background:var(--panel-bg);color:var(--fg);border:1px solid var(--input-border);
              border-radius:4px;padding:3px 8px;font-size:12px;cursor:pointer}
+  #filterPopover.fp-checklist{flex-direction:column;align-items:stretch;width:220px}
+  #filterPopover.fp-checklist input.fp-search{width:100%}
+  .fp-actions{display:flex;gap:4px}
+  .fp-actions button{flex:1}
+  .fp-list{max-height:220px;overflow-y:auto;border:1px solid var(--input-border);border-radius:4px}
+  .fp-row{display:flex;align-items:center;gap:6px;padding:3px 6px;font-size:12px;cursor:pointer}
+  .fp-row:hover{background:var(--hl)}
+  .fp-row .fp-val{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .fp-row .fp-count{color:var(--dim);font-family:ui-monospace,monospace;font-size:10.5px}
+  .fp-buttons{display:flex;gap:4px}
+  .fp-buttons button{flex:1}
   #axisChips{display:none;gap:6px;padding:4px 10px;flex-wrap:wrap}
   .chip{display:inline-flex;align-items:center;gap:5px;background:var(--hl);color:var(--fg);
              border-radius:10px;padding:3px 8px;font-size:11.5px}
@@ -639,6 +649,28 @@ function metaCellAt(i, j){
 // (field_summary) so a field the backend treats as numeric-with-some-NAs
 // doesn't get misclassified as categorical here just because "NA" isn't a JS number.
 const MISSING_TOKENS = new Set(['na', 'n/a', 'nan', 'null', 'none', '-']);
+// Sentinel checklist key for blank/missing entries -- distinct from any real
+// field value since it's not a plain string a metadata value could equal.
+const MISSING_KEY = '\u0000missing';
+
+// Distinct values for a categorical field's filter checklist, counted and
+// ranked by frequency (most common first), with a synthetic "(missing)" row
+// when any entries are blank. Computed client-side since the full metadata
+// array is already loaded -- no backend round trip needed.
+function distinctValues(axis, field){
+  const entries = axis==='observation' ? meta.row_metadata : meta.col_metadata;
+  const counts = new Map();
+  (entries||[]).forEach(e=>{
+    const raw = e ? e[field] : null;
+    const missing = raw===null || raw===undefined || raw==='';
+    const key = missing ? MISSING_KEY : String(raw);
+    const label = missing ? '(missing)' : String(raw);
+    const cur = counts.get(key) || {key, label, count:0};
+    cur.count++;
+    counts.set(key, cur);
+  });
+  return [...counts.values()].sort((a,b)=> b.count-a.count || a.label.localeCompare(b.label));
+}
 function fieldIsNumeric(axis, field){
   const entries = axis==='observation' ? meta.row_metadata : meta.col_metadata;
   const present = (entries||[]).map(e=>e && e[field])
@@ -663,15 +695,17 @@ function recomputeVisible(axis){
       idxs = idxs.filter(i=>{
         const entry = entries && entries[i];
         const v = entry ? entry[f.field] : null;
+        if(f.kind==='categorical'){
+          const missing = v===null || v===undefined || v==='';
+          const key = missing ? MISSING_KEY : String(v);
+          return !f.excluded.includes(key);
+        }
         if(v===null || v===undefined || v==='') return false;
         if(typeof v==='string' && MISSING_TOKENS.has(v.trim().toLowerCase())) return false;
-        if(f.kind==='numeric'){
-          const n = Number(v);
-          if(f.min!==null && n<f.min) return false;
-          if(f.max!==null && n>f.max) return false;
-          return true;
-        }
-        return String(v).toLowerCase().includes(f.text.toLowerCase());
+        const n = Number(v);
+        if(f.min!==null && n<f.min) return false;
+        if(f.max!==null && n>f.max) return false;
+        return true;
       });
     });
     if(state.sortDir!==0){
@@ -1137,18 +1171,44 @@ function openFilterInput(axis, field, anchorEl){
   const rect = anchorEl.getBoundingClientRect();
   pop.style.left = rect.left + 'px';
   pop.style.top = (rect.bottom + 4) + 'px';
+
   if(numeric){
     pop.innerHTML = `<input class="fp-min" type="number" placeholder="min" value="${existing?existing.min ?? '':''}">` +
       `<input class="fp-max" type="number" placeholder="max" value="${existing?existing.max ?? '':''}">` +
       `<button class="fp-apply">Apply</button>` +
       (existing ? `<button class="fp-clear">Clear</button>` : '');
+    document.body.appendChild(pop);
+    pop.querySelector('.fp-min').focus();
   } else {
-    pop.innerHTML = `<input class="fp-text" type="text" placeholder="contains…" value="${existing?escapeHtml(existing.text):''}">` +
-      `<button class="fp-apply">Apply</button>` +
-      (existing ? `<button class="fp-clear">Clear</button>` : '');
+    pop.classList.add('fp-checklist');
+    const values = distinctValues(axis, field);
+    const excluded = new Set(existing ? existing.excluded : []);
+    const rows = values.map(v =>
+      `<label class="fp-row"><input type="checkbox" class="fp-check" value="${escapeHtml(v.key)}" ${excluded.has(v.key) ? '' : 'checked'}>` +
+      `<span class="fp-val">${escapeHtml(v.label)}</span><span class="fp-count">${v.count}</span></label>`
+    ).join('');
+    pop.innerHTML =
+      `<input class="fp-search" type="text" placeholder="Search values…">` +
+      `<div class="fp-actions"><button class="fp-all">All</button><button class="fp-none">None</button></div>` +
+      `<div class="fp-list">${rows}</div>` +
+      `<div class="fp-buttons"><button class="fp-apply">Apply</button>${existing ? '<button class="fp-clear">Clear</button>' : ''}</div>`;
+    document.body.appendChild(pop);
+
+    const search = pop.querySelector('.fp-search');
+    search.addEventListener('input', ()=>{
+      const q = search.value.toLowerCase();
+      pop.querySelectorAll('.fp-row').forEach(row=>{
+        row.style.display = row.querySelector('.fp-val').textContent.toLowerCase().includes(q) ? '' : 'none';
+      });
+    });
+    pop.querySelector('.fp-all').onclick = ()=>{
+      pop.querySelectorAll('.fp-row:not([style*="display: none"]) .fp-check').forEach(cb=>cb.checked=true);
+    };
+    pop.querySelector('.fp-none').onclick = ()=>{
+      pop.querySelectorAll('.fp-row:not([style*="display: none"]) .fp-check').forEach(cb=>cb.checked=false);
+    };
+    search.focus();
   }
-  document.body.appendChild(pop);
-  pop.querySelector(numeric ? '.fp-min' : '.fp-text').focus();
 
   const apply = ()=>{
     const filters = st.filters.filter(f=>f.field!==field);
@@ -1157,8 +1217,8 @@ function openFilterInput(axis, field, anchorEl){
       const maxV = pop.querySelector('.fp-max').value;
       filters.push({field, kind:'numeric', min: minV===''?null:Number(minV), max: maxV===''?null:Number(maxV)});
     } else {
-      const text = pop.querySelector('.fp-text').value.trim();
-      if(text) filters.push({field, kind:'categorical', text});
+      const newExcluded = [...pop.querySelectorAll('.fp-check')].filter(cb=>!cb.checked).map(cb=>cb.value);
+      if(newExcluded.length) filters.push({field, kind:'categorical', excluded:newExcluded});
     }
     st.filters = filters;
     recomputeVisible(axis);
@@ -1177,7 +1237,8 @@ function openFilterInput(axis, field, anchorEl){
     render();
     renderAxisChips();
   };
-  pop.addEventListener('keydown', e=>{ if(e.key==='Enter') apply(); if(e.key==='Escape') closeFilterPopover(); });
+  if(numeric) pop.addEventListener('keydown', e=>{ if(e.key==='Enter') apply(); if(e.key==='Escape') closeFilterPopover(); });
+  else pop.addEventListener('keydown', e=>{ if(e.key==='Escape') closeFilterPopover(); });
 }
 
 document.addEventListener('click', (e)=>{
