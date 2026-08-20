@@ -230,6 +230,7 @@ PAGE = """<!doctype html>
     --row-meta-fg:light-dark(#5c3410,#2a1c0f);
     --col-meta:light-dark(#2266cc,#5b9bd5); --col-meta-bg:light-dark(#d6e6fa,#20344a);
     --col-meta-fg:light-dark(#0f2c54,#0f1c2a);
+    --danger:light-dark(#c0392b,#ff6b6b);
   }
   [data-theme="light"]{ color-scheme: light }
   [data-theme="dark"]{ color-scheme: dark }
@@ -289,6 +290,7 @@ PAGE = """<!doctype html>
   #main{flex:1;display:flex;flex-direction:column;overflow:hidden}
   #colNav{display:flex;align-items:center;justify-content:center;gap:10px;padding-bottom:6px}
   #colNav span{color:var(--dim)}
+  #rowNav span.range-filtered,#colNav span.range-filtered{color:var(--danger);font-weight:700}
   #grid{display:grid;overflow:hidden;flex-shrink:0;align-self:flex-start}
   .cell{border:1px solid var(--cell-border);padding:3px 6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--fs)}
   .hdr{background:var(--hdr-bg);color:var(--hdr-fg)}
@@ -679,6 +681,37 @@ function fieldIsNumeric(axis, field){
   return present.every(v=>typeof v==='number' || (typeof v==='string' && v.trim()!=='' && !isNaN(Number(v))));
 }
 
+// Whether one filter matches one value. Shared by recomputeVisible (AND'ed
+// across all active filters on an axis) and filterMatchCount (one filter in
+// isolation, for the chip's "(N/M)" count) so the two can never drift apart.
+function filterMatches(f, v){
+  if(f.kind==='categorical'){
+    const missing = v===null || v===undefined || v==='';
+    const key = missing ? MISSING_KEY : String(v);
+    return !f.excluded.includes(key);
+  }
+  if(v===null || v===undefined || v==='') return false;
+  if(typeof v==='string' && MISSING_TOKENS.has(v.trim().toLowerCase())) return false;
+  const n = Number(v);
+  if(f.min!==null && n<f.min) return false;
+  if(f.max!==null && n>f.max) return false;
+  return true;
+}
+
+// How many entries on an axis one filter matches, ignoring any other active
+// filters on that axis -- an independent/marginal count, not the running
+// total after stacking. Avoids the count depending on filter order.
+function filterMatchCount(axis, f){
+  const entries = axis==='observation' ? meta.row_metadata : meta.col_metadata;
+  const total = axis==='observation' ? meta.rows : meta.cols;
+  let count = 0;
+  for(let i=0;i<total;i++){
+    const entry = entries && entries[i];
+    if(filterMatches(f, entry ? entry[f.field] : null)) count++;
+  }
+  return {count, total};
+}
+
 // Recompute visObs/visSample from current axisState. Called whenever a sort
 // or filter changes. Leaves the axis untouched (null) if nothing is active,
 // keeping the cheap contiguous fetch path for the common case.
@@ -694,18 +727,7 @@ function recomputeVisible(axis){
     state.filters.forEach(f=>{
       idxs = idxs.filter(i=>{
         const entry = entries && entries[i];
-        const v = entry ? entry[f.field] : null;
-        if(f.kind==='categorical'){
-          const missing = v===null || v===undefined || v==='';
-          const key = missing ? MISSING_KEY : String(v);
-          return !f.excluded.includes(key);
-        }
-        if(v===null || v===undefined || v==='') return false;
-        if(typeof v==='string' && MISSING_TOKENS.has(v.trim().toLowerCase())) return false;
-        const n = Number(v);
-        if(f.min!==null && n<f.min) return false;
-        if(f.max!==null && n>f.max) return false;
-        return true;
+        return filterMatches(f, entry ? entry[f.field] : null);
       });
     });
     if(state.sortDir!==0){
@@ -943,6 +965,13 @@ async function render(){
   const rowWord = mode==='data' ? 'rows' : 'fields';
   document.getElementById('rowRange').textContent = `${rowWord} ${r0+1}-${r1} / ${rowsTotal()}`;
   document.getElementById('colRange').textContent = `cols ${c0+1}-${c1} / ${colsTotal()}`;
+  // Red = a filter (not just a sort) actually shrank this axis below its
+  // full count -- the fields axis (rowFields/colFields) is never filtered,
+  // so only flag the id axis in the modes where it's actually on screen.
+  document.getElementById('rowRange').classList.toggle('range-filtered',
+    mode!=='col' && !!visObs && visObs.length<meta.rows);
+  document.getElementById('colRange').classList.toggle('range-filtered',
+    mode!=='row' && !!visSample && visSample.length<meta.cols);
   document.getElementById('rowUp').disabled = rowPage===0;
   document.getElementById('rowDown').disabled = r1>=rowsTotal();
   document.getElementById('colPrev').disabled = colPage===0;
@@ -1129,18 +1158,24 @@ function cycleSort(axis, field){
 }
 
 // One-line human label for a single filter, shown on its own chip.
-function filterChipLabel(f){
+function filterChipLabel(axis, f){
+  let desc;
   if(f.kind==='numeric'){
-    if(f.min!==null && f.max!==null) return `${f.field}: ${f.min}–${f.max}`;
-    if(f.min!==null) return `${f.field}: ≥ ${f.min}`;
-    if(f.max!==null) return `${f.field}: ≤ ${f.max}`;
-    return f.field;
-  }
-  if(f.excluded.length===1){
+    if(f.min!==null && f.max!==null) desc = `${f.field}: ${f.min}–${f.max}`;
+    else if(f.min!==null) desc = `${f.field}: ≥ ${f.min}`;
+    else if(f.max!==null) desc = `${f.field}: ≤ ${f.max}`;
+    else desc = f.field;
+  } else if(f.excluded.length===1){
     const v = f.excluded[0]===MISSING_KEY ? '(missing)' : f.excluded[0];
-    return `${f.field}: not ${v}`;
+    desc = `${f.field}: not ${v}`;
+  } else {
+    desc = `${f.field}: ${f.excluded.length} excluded`;
   }
-  return `${f.field}: ${f.excluded.length} excluded`;
+  // (N/M) is this filter's own match count in isolation, not the running
+  // total after stacking with other active filters on the same axis --
+  // see filterMatchCount's comment for why.
+  const {count, total} = filterMatchCount(axis, f);
+  return `${desc} (${count}/${total})`;
 }
 
 function removeSort(axis){
@@ -1173,7 +1208,7 @@ function renderAxisChips(){
         `<button class="chip-x" data-kind="sort" data-axis="${axis}">✕</button></span>`);
     }
     st.filters.forEach(f=>{
-      chips.push(`<span class="chip">${axis}: ${escapeHtml(filterChipLabel(f))}` +
+      chips.push(`<span class="chip">${axis}: ${escapeHtml(filterChipLabel(axis, f))}` +
         `<button class="chip-x" data-kind="filter" data-axis="${axis}" data-field="${escapeHtml(f.field)}">✕</button></span>`);
     });
   });
