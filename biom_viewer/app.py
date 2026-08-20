@@ -1128,31 +1128,61 @@ function cycleSort(axis, field){
   renderAxisChips();
 }
 
-function axisChipLabel(axis){
-  const st = axisState[axis];
-  const parts = [];
-  if(st.filters.length) parts.push(`${st.filters.length} filter${st.filters.length>1?'s':''}`);
-  if(st.sortDir!==0) parts.push(`sorted by ${escapeHtml(st.sortField)} ${st.sortDir===1?'▲':'▼'}`);
-  return parts.join(' · ');
+// One-line human label for a single filter, shown on its own chip.
+function filterChipLabel(f){
+  if(f.kind==='numeric'){
+    if(f.min!==null && f.max!==null) return `${f.field}: ${f.min}–${f.max}`;
+    if(f.min!==null) return `${f.field}: ≥ ${f.min}`;
+    if(f.max!==null) return `${f.field}: ≤ ${f.max}`;
+    return f.field;
+  }
+  if(f.excluded.length===1){
+    const v = f.excluded[0]===MISSING_KEY ? '(missing)' : f.excluded[0];
+    return `${f.field}: not ${v}`;
+  }
+  return `${f.field}: ${f.excluded.length} excluded`;
 }
 
-function clearAxis(axis){
-  axisState[axis] = { sortField: null, sortDir: 0, filters: [] };
+function removeSort(axis){
+  axisState[axis].sortField = null;
+  axisState[axis].sortDir = 0;
   recomputeVisible(axis);
   if(axis==='observation'){ rowPage=0; } else { colPage=0; }
   render();
   renderAxisChips();
 }
 
+function removeFilter(axis, field){
+  axisState[axis].filters = axisState[axis].filters.filter(f=>f.field!==field);
+  recomputeVisible(axis);
+  if(axis==='observation'){ rowPage=0; } else { colPage=0; }
+  render();
+  renderAxisChips();
+}
+
+// One chip per active sort and per active filter (not one combined chip per
+// axis) so each can be read and removed independently -- a single "3
+// filters" chip told you nothing about what was actually filtered.
 function renderAxisChips(){
   const el = document.getElementById('axisChips');
-  const chips = ['observation','sample']
-    .filter(axis => axisState[axis].filters.length || axisState[axis].sortDir!==0)
-    .map(axis => `<span class="chip" data-axis="${axis}">${axis}: ${axisChipLabel(axis)} <button class="chip-x" data-axis="${axis}">✕</button></span>`);
+  const chips = [];
+  ['observation','sample'].forEach(axis=>{
+    const st = axisState[axis];
+    if(st.sortDir!==0){
+      chips.push(`<span class="chip">${axis} sorted: ${escapeHtml(st.sortField)} ${st.sortDir===1?'▲':'▼'}` +
+        `<button class="chip-x" data-kind="sort" data-axis="${axis}">✕</button></span>`);
+    }
+    st.filters.forEach(f=>{
+      chips.push(`<span class="chip">${axis}: ${escapeHtml(filterChipLabel(f))}` +
+        `<button class="chip-x" data-kind="filter" data-axis="${axis}" data-field="${escapeHtml(f.field)}">✕</button></span>`);
+    });
+  });
   el.innerHTML = chips.join('');
   el.style.display = chips.length ? 'flex' : 'none';
   el.querySelectorAll('.chip-x').forEach(btn=>{
-    btn.onclick = ()=>clearAxis(btn.dataset.axis);
+    btn.onclick = ()=> btn.dataset.kind==='sort'
+      ? removeSort(btn.dataset.axis)
+      : removeFilter(btn.dataset.axis, btn.dataset.field);
   });
 }
 
