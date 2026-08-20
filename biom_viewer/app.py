@@ -296,6 +296,13 @@ PAGE = """<!doctype html>
   .rh:hover{background:var(--input-border)}
   .hdr.colhdr{cursor:pointer}
   .hdr.colhdr:hover{background:var(--input-border)}
+  .hdr.colhdr:has(.axis-ctl),.rh:has(.axis-ctl){display:flex;align-items:center}
+  .hdr-label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0}
+  .axis-ctl{display:flex;gap:2px;margin-left:4px;flex:none}
+  .axis-ctl button{background:none;border:none;color:var(--dim);cursor:pointer;font-size:calc(var(--fs)*0.95);
+             padding:0 2px;line-height:1}
+  .axis-ctl button:hover{color:var(--fg)}
+  .axis-ctl button.on{color:var(--accent);font-weight:700}
   .z{color:var(--z-fg)}
   .nz{background:var(--nz-bg)}
   .mv{color:var(--fg)}
@@ -921,10 +928,15 @@ async function render(){
     const label = colLabel(c);
     const h = document.createElement('div');
     h.className = 'cell hdr colhdr';
-    h.textContent = label;
     h.title = label;
     h.dataset.c = c;
-    h.addEventListener('click', ()=>{
+    if(mode==='row'){
+      h.innerHTML = `<span class="hdr-label">${escapeHtml(label)}</span>${axisControlsHtml('observation', label)}`;
+    } else {
+      h.textContent = label;
+    }
+    h.addEventListener('click', (e)=>{
+      if(e.target.closest('.axis-ctl')) return; // icon clicks handled separately below
       selR=null; selC=c;
       showSelected(label);
       applyHighlight();
@@ -947,12 +959,15 @@ async function render(){
     if(stripOnRows()){
       rh.classList.add('rh-stats');
       rh.innerHTML = `<div class="stat-line rh-label">${escapeHtml(label)}</div>` + statCellHtml(rowStats[r-r0]);
+    } else if(mode==='col'){
+      rh.innerHTML = `<span class="hdr-label">${escapeHtml(label)}</span>${axisControlsHtml('sample', label)}`;
     } else {
       rh.textContent = label;
     }
     rh.title = label;
     rh.dataset.r = r;
-    rh.addEventListener('click', ()=>{
+    rh.addEventListener('click', (e)=>{
+      if(e.target.closest('.axis-ctl')) return;
       selR=r; selC=null;
       showSelected(label);
       applyHighlight();
@@ -1020,6 +1035,43 @@ function colStatsFetch(j){
     ? window.pywebview.api.field_summary('observation', rowFields[j])
     : window.pywebview.api.col_summary(sampleAt(j));
 }
+
+function axisControlsHtml(axis, field){
+  const st = axisState[axis];
+  const arrow = st.sortField===field ? (st.sortDir===1 ? '▲' : st.sortDir===-1 ? '▼' : '⇅') : '⇅';
+  const sortOn = st.sortField===field && st.sortDir!==0;
+  const filterOn = st.filters.some(f=>f.field===field);
+  return `<span class="axis-ctl">` +
+    `<button class="axis-sort${sortOn?' on':''}" data-axis="${axis}" data-field="${escapeHtml(field)}" title="Sort by ${escapeHtml(field)}">${arrow}</button>` +
+    `<button class="axis-filter${filterOn?' on':''}" data-axis="${axis}" data-field="${escapeHtml(field)}" title="Filter by ${escapeHtml(field)}">⏷</button>` +
+  `</span>`;
+}
+
+function cycleSort(axis, field){
+  const st = axisState[axis];
+  if(st.sortField!==field){ st.sortField=field; st.sortDir=1; }
+  else if(st.sortDir===1){ st.sortDir=-1; }
+  else if(st.sortDir===-1){ st.sortField=null; st.sortDir=0; }
+  else { st.sortDir=1; }
+  recomputeVisible(axis);
+  if(axis==='observation'){ rowPage=0; } else { colPage=0; }
+  render();
+  renderAxisChips();
+}
+
+// Stubs — real implementations land in later tasks (openFilterInput: filter
+// popover; renderAxisChips: status chip strip). Minimal real no-op bodies,
+// not TODOs, so cycleSort above and the click delegation below both work
+// standalone right now without erroring.
+function openFilterInput(){}
+function renderAxisChips(){}
+
+document.getElementById('grid').addEventListener('click', (e)=>{
+  const sortBtn = e.target.closest('.axis-sort');
+  if(sortBtn){ e.stopPropagation(); cycleSort(sortBtn.dataset.axis, sortBtn.dataset.field); return; }
+  const filterBtn = e.target.closest('.axis-filter');
+  if(filterBtn){ e.stopPropagation(); openFilterInput(filterBtn.dataset.axis, filterBtn.dataset.field, filterBtn); return; }
+});
 
 function miniHist(histogram){
   if(!histogram.length) return '';
