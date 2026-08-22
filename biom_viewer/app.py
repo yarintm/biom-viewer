@@ -7,6 +7,7 @@ from collections import Counter
 
 import biom
 import webview
+from webview.menu import Menu, MenuAction, MenuSeparator
 
 TABLE = None
 FILENAME = ""
@@ -187,8 +188,101 @@ def field_summary(axis, field):
     }
 
 
+def build_export_table(spec):
+    # spec: {'observation': {...}, 'sample': {...}}, each with:
+    #   ids: list[str] | None (filtered/sorted id order; None = unchanged)
+    #   replacements: [{field, find, replace}]
+    #   renames: {orig_field: new_field}
+    #   deletedFields: [field, ...]
+    # Mirrors the frontend's buildAxisExportCode -- see that function's
+    # comment for why replacements/renames/deletes go through add_metadata
+    # (merge-by-key) plus an explicit del_metadata for the keys that should
+    # actually disappear (add_metadata alone never removes a key).
+    table = TABLE.copy()
+    for axis in ("observation", "sample"):
+        s = spec.get(axis) or {}
+        ids = s.get("ids")
+        if ids is not None:
+            table = table.filter(ids, axis=axis)
+            table = table.sort_order(ids, axis=axis)
+
+        replacements = s.get("replacements") or []
+        if replacements:
+            md = {}
+            for id_, entry in zip(table.ids(axis=axis), table.metadata(axis=axis) or ()):
+                if not entry:
+                    continue
+                changed = {}
+                for r in replacements:
+                    field = r["field"]
+                    if field in entry and entry[field] is not None:
+                        changed[field] = str(entry[field]).replace(r["find"], r["replace"])
+                if changed:
+                    md[id_] = changed
+            if md:
+                table.add_metadata(md, axis=axis)
+
+        renames = s.get("renames") or {}
+        if renames:
+            md = {}
+            for id_, entry in zip(table.ids(axis=axis), table.metadata(axis=axis) or ()):
+                if not entry:
+                    continue
+                for orig, new in renames.items():
+                    if orig in entry:
+                        md.setdefault(id_, {})[new] = entry[orig]
+            if md:
+                table.add_metadata(md, axis=axis)
+            table.del_metadata(keys=list(renames.keys()), axis=axis)
+
+        deleted = s.get("deletedFields") or []
+        if deleted:
+            table.del_metadata(keys=deleted, axis=axis)
+
+        # to_hdf5() requires every id on an axis to have the exact same
+        # metadata *keys* (not just non-null values) -- real-world biom
+        # files routinely have per-id metadata dicts that disagree (an
+        # optional field present on some ids, absent on others), which
+        # to_hdf5() rejects outright rather than writing a partial file.
+        # Since the write is not transactional, hitting that error mid-write
+        # used to leave a truncated, unopenable .biom at the destination.
+        # Filling every id in to the union of keys (missing = None) makes
+        # the categories consistent without changing any existing value.
+        entries = table.metadata(axis=axis)
+        if entries:
+            all_keys = set()
+            for e in entries:
+                if e:
+                    all_keys.update(e.keys())
+            filled = {}
+            for id_, e in zip(table.ids(axis=axis), entries):
+                entry = {k: None for k in all_keys}
+                entry.update(e or {})
+                filled[id_] = entry
+            table.add_metadata(filled, axis=axis)
+
+    return table
+
+
+def write_biom_file(table, path):
+    # Write to a sibling temp file and rename into place only on success --
+    # to_hdf5() is not transactional, so a mid-write failure (see
+    # build_export_table's docstring) must never leave a truncated file
+    # sitting at the destination the user picked.
+    tmp_path = path + ".tmp"
+    try:
+        with biom.util.biom_open(tmp_path, "w") as f:
+            table.to_hdf5(f, "biom-viewer export")
+        os.replace(tmp_path, path)
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
+
 class Api:
     """Exposed to the frontend as window.pywebview.api.* — no HTTP server involved."""
+
+    window = None  # set in main() once webview.create_window() returns
 
     def meta(self):
         return meta()
@@ -207,6 +301,23 @@ class Api:
 
     def field_summary(self, axis, field):
         return field_summary(axis, field)
+
+    def export_table(self, spec):
+        default_name = os.path.splitext(os.path.basename(FILENAME))[0] + "_export.biom"
+        result = self.window.create_file_dialog(
+            webview.FileDialog.SAVE,
+            save_filename=default_name,
+            file_types=("BIOM file (*.biom)", "All files (*.*)"),
+        )
+        if not result:
+            return {"ok": False}
+        path = result[0] if isinstance(result, (list, tuple)) else result
+        try:
+            table = build_export_table(spec)
+            write_biom_file(table, path)
+        except Exception as exc:  # noqa: BLE001 -- surface to the UI instead of silently dropping
+            return {"ok": False, "error": str(exc)}
+        return {"ok": True, "path": path}
 
 
 PAGE = """<!doctype html>
@@ -346,21 +457,39 @@ PAGE = """<!doctype html>
      top row) blue — in data mode both are on screen at once */
   body.mode-row .rh,body.mode-data .rh{background:var(--row-meta-bg);color:var(--row-meta);border-color:var(--row-meta)}
   body.mode-col .hdr.colhdr,body.mode-data .hdr.colhdr{background:var(--col-meta-bg);color:var(--col-meta);border-color:var(--col-meta)}
-  #metaOverlay{position:fixed;inset:0;background:rgba(0,0,0,.45);display:none;
+  #replaceOverlay{position:fixed;inset:0;background:rgba(0,0,0,.45);display:none;
                align-items:center;justify-content:center;z-index:10}
-  #metaOverlay.open{display:flex}
-  #metaModal{background:var(--panel-bg);border:1px solid var(--border);border-radius:8px;
-             width:360px;max-width:90vw;box-shadow:0 12px 40px rgba(0,0,0,.35)}
-  #metaModal header{display:flex;align-items:center;justify-content:space-between;
+  #replaceOverlay.open{display:flex}
+  #replaceModal{background:var(--panel-bg);border:1px solid var(--border);border-radius:8px;
+             width:420px;max-width:92vw;box-shadow:0 12px 40px rgba(0,0,0,.35)}
+  #replaceModal header{display:flex;align-items:center;justify-content:space-between;
                      padding:12px 14px;border-bottom:1px solid var(--border)}
-  #metaModal header h3{margin:0;font-size:14px}
-  #metaModal .x{cursor:pointer;color:var(--dim);font-size:16px;line-height:1;background:none;border:none}
-  #metaModal .x:hover{color:var(--fg)}
-  #metaModal .rows{padding:10px 14px 14px;display:grid;grid-template-columns:auto 1fr;
-                    gap:6px 12px;font-size:12.5px;max-height:44vh;overflow-y:auto}
-  #metaModal .rows dt{color:var(--dim);white-space:nowrap}
-  #metaModal .rows dd{margin:0;font-family:ui-monospace,monospace;word-break:break-word}
-  #metaModal .empty{padding:0 14px 14px;color:var(--dim);font-size:12.5px}
+  #replaceModal header h3{margin:0;font-size:14px}
+  #replaceModal .x{cursor:pointer;color:var(--dim);font-size:16px;line-height:1;background:none;border:none}
+  #replaceModal .x:hover{color:var(--fg)}
+  #replaceModal .rp-form{padding:12px 14px;display:flex;flex-wrap:wrap;gap:6px}
+  #replaceModal .rp-form select, #replaceModal .rp-form input{background:var(--input-bg);color:var(--fg);
+             border:1px solid var(--input-border);border-radius:4px;padding:4px 6px;font-size:12.5px}
+  #replaceModal .rp-form select{flex:1 1 100%}
+  #replaceModal .rp-form input{flex:1 1 45%;min-width:0}
+  #replaceModal .rp-form button{flex:0 0 auto}
+  #rpList{padding:0 14px 14px;display:flex;flex-direction:column;gap:4px;max-height:30vh;overflow-y:auto}
+  #rpList .rp-item{display:flex;align-items:center;justify-content:space-between;gap:8px;
+             background:var(--hl);border-radius:6px;padding:4px 8px;font-size:12px}
+  #rpList .rp-item button{background:none;border:none;color:var(--dim);cursor:pointer;font-size:12px}
+  #rpList .rp-item button:hover{color:var(--fg)}
+  #codeOverlay{position:fixed;inset:0;background:rgba(0,0,0,.45);display:none;
+               align-items:center;justify-content:center;z-index:10}
+  #codeOverlay.open{display:flex}
+  #codeModal{background:var(--panel-bg);border:1px solid var(--border);border-radius:8px;
+             width:640px;max-width:92vw;box-shadow:0 12px 40px rgba(0,0,0,.35)}
+  #codeModal header{display:flex;align-items:center;justify-content:flex-end;gap:8px;
+                     padding:12px 14px;border-bottom:1px solid var(--border)}
+  #codeModal header h3{margin:0;font-size:14px;margin-right:auto}
+  #codeModal .x{cursor:pointer;color:var(--dim);font-size:16px;line-height:1;background:none;border:none}
+  #codeModal .x:hover{color:var(--fg)}
+  #codeBlock{margin:0;padding:14px;font-family:ui-monospace,monospace;font-size:12px;
+             white-space:pre;overflow:auto;max-height:60vh}
   .stat-cell,.rh-stats{background:var(--panel-bg);color:var(--dim);font-size:calc(var(--fs)*0.9);line-height:1.35;
              padding:4px 6px;display:flex;flex-direction:column;gap:3px;overflow:hidden;cursor:pointer;min-height:0}
   .rh-stats{white-space:normal}
@@ -399,10 +528,6 @@ PAGE = """<!doctype html>
       <button data-m="row">Row metadata</button>
       <button data-m="col">Col metadata</button>
     </span>
-    <button class="tool" id="metaBtn" title="Table metadata">ⓘ</button>
-    <button class="tool" id="themeBtn">🌙 dark</button>
-    <button class="tool" id="fontDown">A-</button>
-    <button class="tool" id="fontUp">A+</button>
   </span>
 </div>
 <div id="axisChips"></div>
@@ -423,13 +548,33 @@ PAGE = """<!doctype html>
     <div id="grid"></div>
   </div>
 </div>
-<div id="metaOverlay">
-  <div id="metaModal">
+<div id="replaceOverlay">
+  <div id="replaceModal">
     <header>
-      <h3 id="metaTitle">Metadata</h3>
-      <button class="x" id="metaClose">✕</button>
+      <h3>Find &amp; Replace</h3>
+      <button class="x" id="replaceClose">✕</button>
     </header>
-    <dl class="rows" id="metaRows"></dl>
+    <div class="rp-form">
+      <select id="rpAxis">
+        <option value="observation">Observation (row) metadata</option>
+        <option value="sample">Sample (col) metadata</option>
+      </select>
+      <select id="rpField"></select>
+      <input id="rpFind" type="text" placeholder="Find…">
+      <input id="rpReplace" type="text" placeholder="Replace with…">
+      <button class="tool" id="rpApply">Apply</button>
+    </div>
+    <div id="rpList"></div>
+  </div>
+</div>
+<div id="codeOverlay">
+  <div id="codeModal">
+    <header>
+      <h3>Export as Python</h3>
+      <button class="tool" id="codeCopy">Copy</button>
+      <button class="x" id="codeClose">✕</button>
+    </header>
+    <pre id="codeBlock"></pre>
   </div>
 </div>
 <script>
@@ -547,8 +692,8 @@ let rowFields=[], colFields=[];
 // to the same axis's rows in data mode. `field_summary`'s numeric/categorical
 // detection is reused for filter input type; see fieldIsNumeric().
 let axisState = {
-  observation: { sortField: null, sortDir: 0, filters: [] }, // sortDir: 0=off, 1=asc, -1=desc
-  sample: { sortField: null, sortDir: 0, filters: [] },
+  observation: { sortField: null, sortDir: 0, filters: [], replacements: [], renames: {}, deletedFields: [] }, // sortDir: 0=off, 1=asc, -1=desc
+  sample: { sortField: null, sortDir: 0, filters: [], replacements: [], renames: {}, deletedFields: [] },
 };
 // filters entries: {field, kind:'numeric', min, max} or {field, kind:'categorical', text}
 
@@ -558,6 +703,45 @@ let visObs = null, visSample = null;
 
 function obsAt(i){ return visObs ? visObs[i] : i; }
 function sampleAt(j){ return visSample ? visSample[j] : j; }
+
+// Undo/redo is whole-state snapshotting rather than per-action inverses --
+// axisState (sort/filter/replace/rename/delete) plus the field-name arrays
+// (deleteField splices them) are small plain data, so a JSON deep-clone
+// before each mutation is simpler and less bug-prone than hand-writing an
+// inverse for every one of the ~10 mutating actions.
+let historyPast = [], historyFuture = [];
+function snapshotState(){
+  return {
+    axisState: JSON.parse(JSON.stringify(axisState)),
+    rowFields: rowFields.slice(),
+    colFields: colFields.slice(),
+  };
+}
+function recordHistory(){
+  historyPast.push(snapshotState());
+  if(historyPast.length>50) historyPast.shift();
+  historyFuture = [];
+}
+function restoreState(snap){
+  axisState = snap.axisState;
+  rowFields = snap.rowFields.slice();
+  colFields = snap.colFields.slice();
+  recomputeVisible('observation');
+  recomputeVisible('sample');
+  rowPage=0; colPage=0;
+  render();
+  renderAxisChips();
+}
+function undo(){
+  if(!historyPast.length) return;
+  historyFuture.push(snapshotState());
+  restoreState(historyPast.pop());
+}
+function redo(){
+  if(!historyFuture.length) return;
+  historyPast.push(snapshotState());
+  restoreState(historyFuture.pop());
+}
 
 // Search results carry a raw matrix index (jumpTo's entry.i/.fi). If that
 // axis has an active sort/filter, the raw index no longer equals its grid
@@ -570,7 +754,9 @@ function resolveAxisPosition(axis, rawIdx){
   if(!vis) return rawIdx;
   const pos = vis.indexOf(rawIdx);
   if(pos>=0) return pos;
-  axisState[axis] = { sortField: null, sortDir: 0, filters: [] };
+  axisState[axis].sortField = null;
+  axisState[axis].sortDir = 0;
+  axisState[axis].filters = [];
   recomputeVisible(axis);
   renderAxisChips();
   return rawIdx;
@@ -625,8 +811,9 @@ function pageBounds(page, perPage, total){
 // column axis (sample ids) stays exactly as in 'data' mode.
 function rowsTotal(){ return mode==='col' ? colFields.length : (visObs ? visObs.length : meta.rows); }
 function colsTotal(){ return mode==='row' ? rowFields.length : (visSample ? visSample.length : meta.cols); }
-function rowLabel(i){ return mode==='col' ? colFields[i] : meta.row_ids[obsAt(i)]; }
-function colLabel(j){ return mode==='row' ? rowFields[j] : meta.col_ids[sampleAt(j)]; }
+function fieldDisplay(axis, field){ return axisState[axis].renames[field] || field; }
+function rowLabel(i){ return mode==='col' ? fieldDisplay('sample', colFields[i]) : meta.row_ids[obsAt(i)]; }
+function colLabel(j){ return mode==='row' ? fieldDisplay('observation', rowFields[j]) : meta.col_ids[sampleAt(j)]; }
 
 function formatMetaValue(v){
   if(Array.isArray(v)) v = v.length ? v.join(', ') : null;
@@ -635,16 +822,29 @@ function formatMetaValue(v){
   return {text:v, cls:'mv'};
 }
 
+// Find/replace is a display-only substring substitution over a field's
+// values -- it doesn't touch meta.row_metadata/col_metadata, so sorting,
+// filtering, and stats keep seeing the original values.
+function applyReplacements(axis, field, v){
+  const reps = axisState[axis].replacements.filter(r=>r.field===field);
+  if(!reps.length || v===null || v===undefined) return v;
+  let s = String(v);
+  reps.forEach(r=>{ s = s.split(r.find).join(r.replace); });
+  return s;
+}
+
 function metaCellAt(i, j){
   // i = row index (grid row), j = col index (grid col)
   if(mode==='row'){
     // row axis = observation obsAt(i), col axis = field j (fields unaffected by filters)
     const entry = meta.row_metadata && meta.row_metadata[obsAt(i)];
-    return entry ? entry[rowFields[j]] : null;
+    const field = rowFields[j];
+    return entry ? applyReplacements('observation', field, entry[field]) : null;
   }
   // mode==='col': row axis = field i (unaffected), col axis = sample sampleAt(j)
   const entry = meta.col_metadata && meta.col_metadata[sampleAt(j)];
-  return entry ? entry[colFields[i]] : null;
+  const field = colFields[i];
+  return entry ? applyReplacements('sample', field, entry[field]) : null;
 }
 
 // Missing-value tokens, mirrored from the backend's _MISSING_TOKENS
@@ -1029,7 +1229,7 @@ async function render(){
     h.title = label;
     h.dataset.c = c;
     if(mode==='row'){
-      h.innerHTML = `<span class="hdr-label">${escapeHtml(label)}</span>${axisControlsHtml('observation', label)}`;
+      h.innerHTML = `<span class="hdr-label">${escapeHtml(label)}</span>${axisControlsHtml('observation', rowFields[c])}`;
     } else {
       h.textContent = label;
     }
@@ -1058,7 +1258,7 @@ async function render(){
       rh.classList.add('rh-stats');
       rh.innerHTML = `<div class="stat-line rh-label">${escapeHtml(label)}</div>` + statCellHtml(rowStats[r-r0]);
     } else if(mode==='col'){
-      rh.innerHTML = `<span class="hdr-label">${escapeHtml(label)}</span>${axisControlsHtml('sample', label)}`;
+      rh.innerHTML = `<span class="hdr-label">${escapeHtml(label)}</span>${axisControlsHtml('sample', colFields[r])}`;
     } else {
       rh.textContent = label;
     }
@@ -1139,13 +1339,16 @@ function axisControlsHtml(axis, field){
   const arrow = st.sortField===field ? (st.sortDir===1 ? '▲' : st.sortDir===-1 ? '▼' : '⇅') : '⇅';
   const sortOn = st.sortField===field && st.sortDir!==0;
   const filterOn = st.filters.some(f=>f.field===field);
+  const display = fieldDisplay(axis, field);
   return `<span class="axis-ctl">` +
-    `<button class="axis-sort${sortOn?' on':''}" data-axis="${axis}" data-field="${escapeHtml(field)}" title="Sort by ${escapeHtml(field)}">${arrow}</button>` +
-    `<button class="axis-filter${filterOn?' on':''}" data-axis="${axis}" data-field="${escapeHtml(field)}" title="Filter by ${escapeHtml(field)}">⏷</button>` +
+    `<button class="axis-sort${sortOn?' on':''}" data-axis="${axis}" data-field="${escapeHtml(field)}" title="Sort by ${escapeHtml(display)}">${arrow}</button>` +
+    `<button class="axis-filter${filterOn?' on':''}" data-axis="${axis}" data-field="${escapeHtml(field)}" title="Filter by ${escapeHtml(display)}">⏷</button>` +
+    `<button class="axis-edit" data-axis="${axis}" data-field="${escapeHtml(field)}" title="Rename or delete ${escapeHtml(display)}">✎</button>` +
   `</span>`;
 }
 
 function cycleSort(axis, field){
+  recordHistory();
   const st = axisState[axis];
   if(st.sortField!==field){ st.sortField=field; st.sortDir=1; }
   else if(st.sortDir===1){ st.sortDir=-1; }
@@ -1159,17 +1362,18 @@ function cycleSort(axis, field){
 
 // One-line human label for a single filter, shown on its own chip.
 function filterChipLabel(axis, f){
+  const display = fieldDisplay(axis, f.field);
   let desc;
   if(f.kind==='numeric'){
-    if(f.min!==null && f.max!==null) desc = `${f.field}: ${f.min}–${f.max}`;
-    else if(f.min!==null) desc = `${f.field}: ≥ ${f.min}`;
-    else if(f.max!==null) desc = `${f.field}: ≤ ${f.max}`;
-    else desc = f.field;
+    if(f.min!==null && f.max!==null) desc = `${display}: ${f.min}–${f.max}`;
+    else if(f.min!==null) desc = `${display}: ≥ ${f.min}`;
+    else if(f.max!==null) desc = `${display}: ≤ ${f.max}`;
+    else desc = display;
   } else if(f.excluded.length===1){
     const v = f.excluded[0]===MISSING_KEY ? '(missing)' : f.excluded[0];
-    desc = `${f.field}: not ${v}`;
+    desc = `${display}: not ${v}`;
   } else {
-    desc = `${f.field}: ${f.excluded.length} excluded`;
+    desc = `${display}: ${f.excluded.length} excluded`;
   }
   // (N/M) is this filter's own match count in isolation, not the running
   // total after stacking with other active filters on the same axis --
@@ -1179,6 +1383,7 @@ function filterChipLabel(axis, f){
 }
 
 function removeSort(axis){
+  recordHistory();
   axisState[axis].sortField = null;
   axisState[axis].sortDir = 0;
   recomputeVisible(axis);
@@ -1188,9 +1393,50 @@ function removeSort(axis){
 }
 
 function removeFilter(axis, field){
+  recordHistory();
   axisState[axis].filters = axisState[axis].filters.filter(f=>f.field!==field);
   recomputeVisible(axis);
   if(axis==='observation'){ rowPage=0; } else { colPage=0; }
+  render();
+  renderAxisChips();
+}
+
+function renameField(axis, field, newName){
+  recordHistory();
+  axisState[axis].renames[field] = newName;
+  render();
+  renderAxisChips();
+}
+
+function unrenameField(axis, field){
+  recordHistory();
+  delete axisState[axis].renames[field];
+  render();
+  renderAxisChips();
+}
+
+function deleteField(axis, field){
+  recordHistory();
+  const fieldsArr = axis==='observation' ? rowFields : colFields;
+  const idx = fieldsArr.indexOf(field);
+  if(idx>=0) fieldsArr.splice(idx, 1);
+  axisState[axis].deletedFields.push(field);
+  delete axisState[axis].renames[field];
+  axisState[axis].filters = axisState[axis].filters.filter(f=>f.field!==field);
+  axisState[axis].replacements = axisState[axis].replacements.filter(r=>r.field!==field);
+  if(axisState[axis].sortField===field){ axisState[axis].sortField=null; axisState[axis].sortDir=0; }
+  recomputeVisible(axis);
+  rowPage=0; colPage=0;
+  render();
+  renderAxisChips();
+}
+
+function undeleteField(axis, field){
+  recordHistory();
+  axisState[axis].deletedFields = axisState[axis].deletedFields.filter(f=>f!==field);
+  const fieldsArr = axis==='observation' ? rowFields : colFields;
+  if(!fieldsArr.includes(field)) fieldsArr.push(field);
+  rowPage=0; colPage=0;
   render();
   renderAxisChips();
 }
@@ -1204,26 +1450,174 @@ function renderAxisChips(){
   ['observation','sample'].forEach(axis=>{
     const st = axisState[axis];
     if(st.sortDir!==0){
-      chips.push(`<span class="chip">${axis} sorted: ${escapeHtml(st.sortField)} ${st.sortDir===1?'▲':'▼'}` +
+      chips.push(`<span class="chip">${axis} sorted: ${escapeHtml(fieldDisplay(axis, st.sortField))} ${st.sortDir===1?'▲':'▼'}` +
         `<button class="chip-x" data-kind="sort" data-axis="${axis}">✕</button></span>`);
     }
     st.filters.forEach(f=>{
       chips.push(`<span class="chip">${axis}: ${escapeHtml(filterChipLabel(axis, f))}` +
         `<button class="chip-x" data-kind="filter" data-axis="${axis}" data-field="${escapeHtml(f.field)}">✕</button></span>`);
     });
+    st.replacements.forEach(r=>{
+      chips.push(`<span class="chip">${axis}: ${escapeHtml(fieldDisplay(axis, r.field))} "${escapeHtml(r.find)}"→"${escapeHtml(r.replace)}"` +
+        `<button class="chip-x" data-kind="replace" data-axis="${axis}" data-field="${escapeHtml(r.field)}">✕</button></span>`);
+    });
+    Object.entries(st.renames).forEach(([orig, newName])=>{
+      chips.push(`<span class="chip">${axis}: ${escapeHtml(orig)} → ${escapeHtml(newName)}` +
+        `<button class="chip-x" data-kind="unrename" data-axis="${axis}" data-field="${escapeHtml(orig)}">✕</button></span>`);
+    });
+    st.deletedFields.forEach(f=>{
+      chips.push(`<span class="chip">${axis}: deleted ${escapeHtml(f)}` +
+        `<button class="chip-x" data-kind="undelete" data-axis="${axis}" data-field="${escapeHtml(f)}">✕</button></span>`);
+    });
   });
   el.innerHTML = chips.join('');
   el.style.display = chips.length ? 'flex' : 'none';
   el.querySelectorAll('.chip-x').forEach(btn=>{
-    btn.onclick = ()=> btn.dataset.kind==='sort'
-      ? removeSort(btn.dataset.axis)
-      : removeFilter(btn.dataset.axis, btn.dataset.field);
+    const kind = btn.dataset.kind;
+    if(kind==='sort') btn.onclick = ()=>removeSort(btn.dataset.axis);
+    else if(kind==='replace') btn.onclick = ()=>removeReplacement(btn.dataset.axis, btn.dataset.field);
+    else if(kind==='unrename') btn.onclick = ()=>unrenameField(btn.dataset.axis, btn.dataset.field);
+    else if(kind==='undelete') btn.onclick = ()=>undeleteField(btn.dataset.axis, btn.dataset.field);
+    else btn.onclick = ()=>removeFilter(btn.dataset.axis, btn.dataset.field);
   });
+}
+
+// Generates illustrative pandas/biom-format code reproducing the current
+// per-axis sort/filter as a standalone script -- not a byte-exact replay of
+// filterMatches (e.g. missing-token strings like "n/a" become NaN via
+// pd.to_numeric(errors='coerce')/isna() rather than a hardcoded token set),
+// good enough for a user to paste and adapt.
+function pyRepr(v){
+  if(v===null || v===undefined) return 'None';
+  if(typeof v==='number') return String(v);
+  return JSON.stringify(String(v));
+}
+function pyList(arr){ return '[' + arr.map(pyRepr).join(', ') + ']'; }
+
+function buildAxisExportCode(axis){
+  const st = axisState[axis];
+  const renameEntries = Object.entries(st.renames);
+  const hasSortOrFilter = st.filters.length || st.sortDir!==0;
+  const hasFieldOps = st.replacements.length || renameEntries.length || st.deletedFields.length;
+  if(!hasSortOrFilter && !hasFieldOps) return null;
+  const metaVar = axis==='observation' ? 'obs_meta' : 'samp_meta';
+  const lines = [];
+  lines.push(`# --- ${axis} axis${st.replacements.length ? ': '+st.replacements.length+' replacement(s)' : ''}${renameEntries.length ? ', '+renameEntries.length+' rename(s)' : ''}${st.deletedFields.length ? ', '+st.deletedFields.length+' deleted field(s)' : ''}${st.filters.length ? ', '+st.filters.length+' filter(s)' : ''}${st.sortDir ? ', sorted by '+st.sortField : ''} ---`);
+  lines.push(`${metaVar} = table.metadata_to_dataframe('${axis}')`);
+  st.replacements.forEach(r=>{
+    const col = `${metaVar}[${pyRepr(r.field)}]`;
+    lines.push(`${col} = ${col}.astype(str).str.replace(${pyRepr(r.find)}, ${pyRepr(r.replace)}, regex=False)`);
+  });
+  if(renameEntries.length){
+    const mapping = renameEntries.map(([o,n])=>`${pyRepr(o)}: ${pyRepr(n)}`).join(', ');
+    lines.push(`${metaVar} = ${metaVar}.rename(columns={${mapping}})`);
+  }
+  if(st.deletedFields.length){
+    lines.push(`${metaVar} = ${metaVar}.drop(columns=${pyList(st.deletedFields)})`);
+  }
+  if(!hasSortOrFilter){
+    lines.push(`table.add_metadata(${metaVar}.to_dict(orient='index'), axis='${axis}')`);
+    const droppedKeys = st.deletedFields.concat(renameEntries.map(([o])=>o));
+    if(droppedKeys.length) lines.push(`table.del_metadata(keys=${pyList(droppedKeys)}, axis='${axis}')`);
+    return lines;
+  }
+  lines.push(`mask = pd.Series(True, index=${metaVar}.index)`);
+  st.filters.forEach((f, i)=>{
+    const col = `${metaVar}[${pyRepr(f.field)}]`;
+    if(f.kind==='numeric'){
+      const vals = `vals${i}`;
+      lines.push(`${vals} = pd.to_numeric(${col}, errors='coerce')`);
+      if(f.min!==null && f.max!==null) lines.push(`mask &= ${vals}.between(${f.min}, ${f.max})`);
+      else if(f.min!==null) lines.push(`mask &= ${vals} >= ${f.min}`);
+      else if(f.max!==null) lines.push(`mask &= ${vals} <= ${f.max}`);
+    } else {
+      const excluded = f.excluded.filter(k=>k!==MISSING_KEY);
+      const dropMissing = f.excluded.includes(MISSING_KEY);
+      lines.push(`excluded${i} = ${pyList(excluded)}`);
+      lines.push(dropMissing
+        ? `mask &= ~(${col}.isin(excluded${i}) | ${col}.isna())`
+        : `mask &= ~${col}.isin(excluded${i})`);
+    }
+  });
+  lines.push(`ids = ${metaVar}.index[mask]`);
+  if(st.sortDir!==0){
+    const numeric = fieldIsNumeric(axis, st.sortField);
+    const col = `${metaVar}.loc[ids, ${pyRepr(st.sortField)}]`;
+    lines.push(numeric
+      ? `sort_key = pd.to_numeric(${col}, errors='coerce')`
+      : `sort_key = ${col}.astype(str)`);
+    lines.push(`ids = sort_key.sort_values(ascending=${st.sortDir===1}).index`);
+  }
+  lines.push(`table = table.filter(list(ids), axis='${axis}')`);
+  if(st.sortDir!==0) lines.push(`table = table.sort_order(list(ids), axis='${axis}')`);
+  return lines;
+}
+
+function buildExportCode(){
+  const axesActive = ['observation','sample'].filter(a=>{
+    const st = axisState[a];
+    return st.filters.length || st.sortDir!==0 || st.replacements.length ||
+      Object.keys(st.renames).length || st.deletedFields.length;
+  });
+  const lines = ['import biom'];
+  if(axesActive.length) lines.push('import pandas as pd');
+  lines.push('', `table = biom.load_table(${pyRepr(meta.filename)})`, '');
+  if(!axesActive.length){
+    lines.push('# No sort, filter, or find/replace currently active in the viewer.');
+  } else {
+    axesActive.forEach((axis, i)=>{
+      lines.push(...buildAxisExportCode(axis));
+      if(i < axesActive.length-1) lines.push('');
+    });
+  }
+  return lines.join('\\n');
+}
+
+function openExportModal(){
+  document.getElementById('codeBlock').textContent = buildExportCode();
+  document.getElementById('codeOverlay').classList.add('open');
+}
+document.getElementById('codeCopy').onclick = ()=>{
+  navigator.clipboard.writeText(document.getElementById('codeBlock').textContent);
+};
+document.getElementById('codeClose').onclick = ()=>document.getElementById('codeOverlay').classList.remove('open');
+document.getElementById('codeOverlay').addEventListener('click', (e)=>{
+  if(e.target.id === 'codeOverlay') e.currentTarget.classList.remove('open');
+});
+
+// Mirrors buildAxisExportCode's logic but as data for the backend (build_export_table
+// in app.py) to actually apply and write out, rather than as a script for the user
+// to run themselves.
+function buildExportSpec(){
+  const spec = {};
+  ['observation','sample'].forEach(axis=>{
+    const st = axisState[axis];
+    const vis = axis==='observation' ? visObs : visSample;
+    const rawIds = axis==='observation' ? meta.row_ids : meta.col_ids;
+    spec[axis] = {
+      ids: vis ? vis.map(i=>rawIds[i]) : null,
+      replacements: st.replacements,
+      renames: st.renames,
+      deletedFields: st.deletedFields,
+    };
+  });
+  return spec;
+}
+
+async function exportBiomFile(){
+  try{
+    const res = await window.pywebview.api.export_table(buildExportSpec());
+    if(res && res.ok) showSelected(`Exported to ${res.path}`);
+    else if(res && res.error) showSelected(`Export failed: ${res.error}`);
+  } catch(err){
+    showSelected(`Export failed: ${err}`);
+  }
 }
 
 function closeFilterPopover(){
   const existing = document.getElementById('filterPopover');
   if(existing) existing.remove();
+  return !!existing;
 }
 
 function openFilterInput(axis, field, anchorEl){
@@ -1293,6 +1687,7 @@ function openFilterInput(axis, field, anchorEl){
   }
 
   const apply = ()=>{
+    recordHistory();
     const filters = st.filters.filter(f=>f.field!==field);
     if(numeric){
       const minV = pop.querySelector('.fp-min').value;
@@ -1312,6 +1707,7 @@ function openFilterInput(axis, field, anchorEl){
   pop.querySelector('.fp-apply').onclick = apply;
   const clearBtn = pop.querySelector('.fp-clear');
   if(clearBtn) clearBtn.onclick = ()=>{
+    recordHistory();
     st.filters = st.filters.filter(f=>f.field!==field);
     recomputeVisible(axis);
     if(axis==='observation'){ rowPage=0; } else { colPage=0; }
@@ -1323,9 +1719,37 @@ function openFilterInput(axis, field, anchorEl){
   else pop.addEventListener('keydown', e=>{ if(e.key==='Escape') closeFilterPopover(); });
 }
 
+// Rename/delete a field inline, anchored to its header -- reuses the same
+// #filterPopover singleton as openFilterInput (only one popover open at a
+// time) so it gets the same outside-click-close and Escape handling for free.
+function openFieldPopover(axis, field, anchorEl){
+  closeFilterPopover();
+  const pop = document.createElement('div');
+  pop.id = 'filterPopover';
+  const rect = anchorEl.getBoundingClientRect();
+  pop.style.left = rect.left + 'px';
+  pop.style.top = (rect.bottom + 4) + 'px';
+  const current = fieldDisplay(axis, field);
+  pop.innerHTML = `<input class="fp-text" type="text" value="${escapeHtml(current)}">` +
+    `<button class="fp-apply">Rename</button>` +
+    `<button class="fp-clear">Delete</button>`;
+  document.body.appendChild(pop);
+  const input = pop.querySelector('.fp-text');
+  input.focus();
+  input.select();
+  const rename = ()=>{
+    const val = input.value.trim();
+    if(val && val!==field) renameField(axis, field, val);
+    closeFilterPopover();
+  };
+  pop.querySelector('.fp-apply').onclick = rename;
+  pop.querySelector('.fp-clear').onclick = ()=>{ deleteField(axis, field); closeFilterPopover(); };
+  pop.addEventListener('keydown', e=>{ if(e.key==='Enter') rename(); if(e.key==='Escape') closeFilterPopover(); });
+}
+
 document.addEventListener('click', (e)=>{
   const pop = document.getElementById('filterPopover');
-  if(pop && !pop.contains(e.target) && !e.target.closest('.axis-filter')) closeFilterPopover();
+  if(pop && !pop.contains(e.target) && !e.target.closest('.axis-filter') && !e.target.closest('.axis-edit')) closeFilterPopover();
 });
 
 document.getElementById('grid').addEventListener('click', (e)=>{
@@ -1333,6 +1757,8 @@ document.getElementById('grid').addEventListener('click', (e)=>{
   if(sortBtn){ e.stopPropagation(); cycleSort(sortBtn.dataset.axis, sortBtn.dataset.field); return; }
   const filterBtn = e.target.closest('.axis-filter');
   if(filterBtn){ e.stopPropagation(); openFilterInput(filterBtn.dataset.axis, filterBtn.dataset.field, filterBtn); return; }
+  const editBtn = e.target.closest('.axis-edit');
+  if(editBtn){ e.stopPropagation(); openFieldPopover(editBtn.dataset.axis, editBtn.dataset.field, editBtn); return; }
 });
 
 function miniHist(histogram){
@@ -1407,35 +1833,62 @@ function applyHighlight(){
   });
 }
 
-function openMeta(title, fields){
-  document.getElementById('metaTitle').textContent = title;
-  const rows = document.getElementById('metaRows');
-  rows.innerHTML = '';
-  const entries = Object.entries(fields).filter(([,v])=>v!==null && v!==undefined && v!=='');
-  if(!entries.length){
-    rows.outerHTML = '<div class="empty" id="metaRows">No metadata.</div>';
-  } else {
-    entries.forEach(([k,v])=>{
-      const dt = document.createElement('dt'); dt.textContent = k;
-      const dd = document.createElement('dd');
-      dd.textContent = Array.isArray(v) ? v.join(', ') : v;
-      rows.append(dt, dd);
-    });
-  }
-  document.getElementById('metaOverlay').classList.add('open');
+function rpFieldsFor(axis){ return axis==='observation' ? rowFields : colFields; }
+
+function populateRpFields(){
+  const axis = document.getElementById('rpAxis').value;
+  const sel = document.getElementById('rpField');
+  sel.innerHTML = rpFieldsFor(axis).map(f=>`<option value="${escapeHtml(f)}">${escapeHtml(fieldDisplay(axis, f))}</option>`).join('');
 }
 
-document.getElementById('metaBtn').onclick = ()=>{
-  openMeta('Table metadata', {
-    table_id: meta.table_id,
-    type: meta.table_type,
-    generated_by: meta.generated_by,
-    create_date: meta.create_date,
+function renderRpList(){
+  const items = [];
+  ['observation','sample'].forEach(axis=>{
+    axisState[axis].replacements.forEach(r=>{
+      items.push(`<div class="rp-item"><span>${escapeHtml(axis)}: ${escapeHtml(fieldDisplay(axis, r.field))} — "${escapeHtml(r.find)}" → "${escapeHtml(r.replace)}"</span>` +
+        `<button data-axis="${axis}" data-field="${escapeHtml(r.field)}">✕</button></div>`);
+    });
   });
+  const el = document.getElementById('rpList');
+  el.innerHTML = items.join('');
+  el.querySelectorAll('button').forEach(btn=>{
+    btn.onclick = ()=> removeReplacement(btn.dataset.axis, btn.dataset.field);
+  });
+}
+
+function removeReplacement(axis, field){
+  recordHistory();
+  axisState[axis].replacements = axisState[axis].replacements.filter(r=>r.field!==field);
+  render();
+  renderAxisChips();
+  renderRpList();
+}
+
+function openReplaceModal(){
+  populateRpFields();
+  renderRpList();
+  document.getElementById('replaceOverlay').classList.add('open');
+  document.getElementById('rpFind').focus();
+}
+document.getElementById('rpAxis').addEventListener('change', populateRpFields);
+document.getElementById('rpApply').onclick = ()=>{
+  const axis = document.getElementById('rpAxis').value;
+  const field = document.getElementById('rpField').value;
+  const find = document.getElementById('rpFind').value;
+  const replace = document.getElementById('rpReplace').value;
+  if(!field || !find) return;
+  recordHistory();
+  axisState[axis].replacements = axisState[axis].replacements.filter(r=>r.field!==field);
+  axisState[axis].replacements.push({field, find, replace});
+  document.getElementById('rpFind').value = '';
+  document.getElementById('rpReplace').value = '';
+  render();
+  renderAxisChips();
+  renderRpList();
 };
-document.getElementById('metaClose').onclick = ()=>document.getElementById('metaOverlay').classList.remove('open');
-document.getElementById('metaOverlay').addEventListener('click', (e)=>{
-  if(e.target.id === 'metaOverlay') e.currentTarget.classList.remove('open');
+document.getElementById('replaceClose').onclick = ()=>document.getElementById('replaceOverlay').classList.remove('open');
+document.getElementById('replaceOverlay').addEventListener('click', (e)=>{
+  if(e.target.id === 'replaceOverlay') e.currentTarget.classList.remove('open');
 });
 
 // 'row' mode only swaps the column axis, 'col' mode only swaps the row axis —
@@ -1488,28 +1941,46 @@ window.addEventListener('resize', ()=>{
   resizeT = setTimeout(()=>{ rowPage=0; colPage=0; render(); }, 150);
 });
 
-const themeBtn = document.getElementById('themeBtn');
 const systemDark = window.matchMedia('(prefers-color-scheme: dark)');
-// label shows the theme in effect; follows the system until the user overrides
-function themeLabel(){
-  const t = document.documentElement.dataset.theme || (systemDark.matches ? 'dark' : 'light');
-  themeBtn.textContent = t === 'dark' ? '🌙 dark' : '☀️ light';
-}
-themeBtn.onclick = ()=>{
+function toggleTheme(){
   const dark = (document.documentElement.dataset.theme || (systemDark.matches ? 'dark' : 'light')) === 'dark';
   document.documentElement.dataset.theme = dark ? 'light' : 'dark';
-  themeLabel();
-};
-systemDark.addEventListener('change', themeLabel);
-themeLabel();
+}
 
 function setFontSize(px){
   fontSize = Math.max(8, Math.min(28, px));
   document.documentElement.style.setProperty('--fs', fontSize+'px');
   rowPage=0; colPage=0; render();
 }
-document.getElementById('fontUp').onclick = ()=>setFontSize(fontSize+1);
-document.getElementById('fontDown').onclick = ()=>setFontSize(fontSize-1);
+
+document.addEventListener('keydown', (e)=>{
+  const mod = e.metaKey || e.ctrlKey;
+  if(mod){
+    const k = e.key.toLowerCase();
+    if(k==='f'){ e.preventDefault(); document.getElementById('searchBox').focus(); }
+    else if(k==='r'){ e.preventDefault(); openReplaceModal(); }
+    else if(k==='e'){ e.preventDefault(); openExportModal(); }
+    else if(k==='s'){ e.preventDefault(); exportBiomFile(); }
+    else if(k==='z' && e.shiftKey){ e.preventDefault(); redo(); }
+    else if(k==='z'){ e.preventDefault(); undo(); }
+    else if(e.key==='=' || e.key==='+'){ e.preventDefault(); setFontSize(fontSize+1); }
+    else if(e.key==='-'){ e.preventDefault(); setFontSize(fontSize-1); }
+    return;
+  }
+  if(e.key==='Escape'){
+    let handled = false;
+    if(closeFilterPopover()) handled = true;
+    ['codeOverlay','replaceOverlay'].forEach(id=>{
+      const el = document.getElementById(id);
+      if(el.classList.contains('open')){ el.classList.remove('open'); handled = true; }
+    });
+    const results = document.getElementById('searchResults');
+    if(results.classList.contains('open')){ results.classList.remove('open'); handled = true; }
+    if(!handled && document.activeElement && document.activeElement !== document.body && document.activeElement.blur){
+      document.activeElement.blur();
+    }
+  }
+});
 
 window.addEventListener('pywebviewready', loadMeta);
 </script>
@@ -1547,9 +2018,39 @@ def main():
     FILENAME = path
 
     title = f"BIOM Viewer — {os.path.basename(path)}"
-    webview.create_window(title, html=PAGE, js_api=Api(), width=1280, height=820, min_size=(600, 400))
+    api = Api()
+    window = webview.create_window(title, html=PAGE, js_api=api, width=1280, height=820, min_size=(600, 400))
+    api.window = window
     _set_dock_icon()
-    webview.start()
+
+    def js(code):
+        return lambda: window.evaluate_js(code)
+
+    # Replaces pywebview's default Edit/View menus (Cut/Copy/Paste/Fullscreen)
+    # with the app's own actions -- native menu items can't carry a Cocoa key
+    # equivalent through pywebview's public API, so ⌘-shortcuts stay bound in
+    # the page's own keydown listener; these menu items are for discovery/click.
+    webview.settings["SHOW_DEFAULT_MENUS"] = False
+    menu = [
+        Menu("File", [
+            MenuAction("Export as Python…", js("openExportModal()")),
+            MenuAction("Export View as .biom…", js("exportBiomFile()")),
+        ]),
+        Menu("Edit", [
+            MenuAction("Undo", js("undo()")),
+            MenuAction("Redo", js("redo()")),
+            MenuSeparator(),
+            MenuAction("Find…", js("document.getElementById('searchBox').focus()")),
+            MenuAction("Find & Replace…", js("openReplaceModal()")),
+        ]),
+        Menu("View", [
+            MenuAction("Toggle Theme", js("toggleTheme()")),
+            MenuSeparator(),
+            MenuAction("Increase Font Size", js("setFontSize(fontSize+1)")),
+            MenuAction("Decrease Font Size", js("setFontSize(fontSize-1)")),
+        ]),
+    ]
+    webview.start(menu=menu)
 
 
 if __name__ == "__main__":

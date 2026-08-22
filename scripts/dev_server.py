@@ -5,7 +5,9 @@ ordinary browser automation (clicks, screenshots) instead of the native
 window, which offers no such tooling. Not part of the shipped app.
 """
 import json
+import os
 import sys
+import tempfile
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import biom
@@ -26,6 +28,7 @@ if(!window.pywebview){
     row_summary: (r) => post('/api/row_summary', {r}),
     col_summary: (c) => post('/api/col_summary', {c}),
     field_summary: (axis, field) => post('/api/field_summary', {axis, field}),
+    export_table: (spec) => post('/api/export_table', {spec}),
   }};
   window.dispatchEvent(new Event('pywebviewready'));
 }
@@ -39,7 +42,22 @@ API = {
     "/api/row_summary": lambda body: bv.row_summary(body["r"]),
     "/api/col_summary": lambda body: bv.col_summary(body["c"]),
     "/api/field_summary": lambda body: bv.field_summary(body["axis"], body["field"]),
+    "/api/export_table": lambda body: _dev_export(body["spec"]),
 }
+
+
+def _dev_export(spec):
+    # No native save dialog here -- write to a temp path instead, so the
+    # export flow (spec -> build_export_table -> .biom on disk) can be
+    # exercised the same way data_window etc. are: over HTTP, from a browser.
+    fd, path = tempfile.mkstemp(suffix=".biom", prefix="biom-viewer-dev-export-")
+    os.close(fd)
+    try:
+        table = bv.build_export_table(spec)
+        bv.write_biom_file(table, path)
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": str(exc)}
+    return {"ok": True, "path": path}
 
 
 class Handler(BaseHTTPRequestHandler):
