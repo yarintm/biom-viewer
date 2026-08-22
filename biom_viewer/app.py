@@ -361,6 +361,18 @@ PAGE = """<!doctype html>
   #metaModal .rows dt{color:var(--dim);white-space:nowrap}
   #metaModal .rows dd{margin:0;font-family:ui-monospace,monospace;word-break:break-word}
   #metaModal .empty{padding:0 14px 14px;color:var(--dim);font-size:12.5px}
+  #codeOverlay{position:fixed;inset:0;background:rgba(0,0,0,.45);display:none;
+               align-items:center;justify-content:center;z-index:10}
+  #codeOverlay.open{display:flex}
+  #codeModal{background:var(--panel-bg);border:1px solid var(--border);border-radius:8px;
+             width:640px;max-width:92vw;box-shadow:0 12px 40px rgba(0,0,0,.35)}
+  #codeModal header{display:flex;align-items:center;justify-content:flex-end;gap:8px;
+                     padding:12px 14px;border-bottom:1px solid var(--border)}
+  #codeModal header h3{margin:0;font-size:14px;margin-right:auto}
+  #codeModal .x{cursor:pointer;color:var(--dim);font-size:16px;line-height:1;background:none;border:none}
+  #codeModal .x:hover{color:var(--fg)}
+  #codeBlock{margin:0;padding:14px;font-family:ui-monospace,monospace;font-size:12px;
+             white-space:pre;overflow:auto;max-height:60vh}
   .stat-cell,.rh-stats{background:var(--panel-bg);color:var(--dim);font-size:calc(var(--fs)*0.9);line-height:1.35;
              padding:4px 6px;display:flex;flex-direction:column;gap:3px;overflow:hidden;cursor:pointer;min-height:0}
   .rh-stats{white-space:normal}
@@ -400,6 +412,7 @@ PAGE = """<!doctype html>
       <button data-m="col">Col metadata</button>
     </span>
     <button class="tool" id="metaBtn" title="Table metadata">ⓘ</button>
+    <button class="tool" id="exportBtn" title="Export current sort/filter as Python code">&lt;/&gt;</button>
     <button class="tool" id="themeBtn">🌙 dark</button>
     <button class="tool" id="fontDown">A-</button>
     <button class="tool" id="fontUp">A+</button>
@@ -430,6 +443,16 @@ PAGE = """<!doctype html>
       <button class="x" id="metaClose">✕</button>
     </header>
     <dl class="rows" id="metaRows"></dl>
+  </div>
+</div>
+<div id="codeOverlay">
+  <div id="codeModal">
+    <header>
+      <h3>Export as Python</h3>
+      <button class="tool" id="codeCopy">Copy</button>
+      <button class="x" id="codeClose">✕</button>
+    </header>
+    <pre id="codeBlock"></pre>
   </div>
 </div>
 <script>
@@ -1220,6 +1243,85 @@ function renderAxisChips(){
       : removeFilter(btn.dataset.axis, btn.dataset.field);
   });
 }
+
+// Generates illustrative pandas/biom-format code reproducing the current
+// per-axis sort/filter as a standalone script -- not a byte-exact replay of
+// filterMatches (e.g. missing-token strings like "n/a" become NaN via
+// pd.to_numeric(errors='coerce')/isna() rather than a hardcoded token set),
+// good enough for a user to paste and adapt.
+function pyRepr(v){
+  if(v===null || v===undefined) return 'None';
+  if(typeof v==='number') return String(v);
+  return JSON.stringify(String(v));
+}
+function pyList(arr){ return '[' + arr.map(pyRepr).join(', ') + ']'; }
+
+function buildAxisExportCode(axis){
+  const st = axisState[axis];
+  if(!st.filters.length && st.sortDir===0) return null;
+  const metaVar = axis==='observation' ? 'obs_meta' : 'samp_meta';
+  const lines = [];
+  lines.push(`# --- ${axis} axis${st.filters.length ? ': '+st.filters.length+' filter(s)' : ''}${st.sortDir ? ', sorted by '+st.sortField : ''} ---`);
+  lines.push(`${metaVar} = table.metadata_to_dataframe('${axis}')`);
+  lines.push(`mask = pd.Series(True, index=${metaVar}.index)`);
+  st.filters.forEach((f, i)=>{
+    const col = `${metaVar}[${pyRepr(f.field)}]`;
+    if(f.kind==='numeric'){
+      const vals = `vals${i}`;
+      lines.push(`${vals} = pd.to_numeric(${col}, errors='coerce')`);
+      if(f.min!==null && f.max!==null) lines.push(`mask &= ${vals}.between(${f.min}, ${f.max})`);
+      else if(f.min!==null) lines.push(`mask &= ${vals} >= ${f.min}`);
+      else if(f.max!==null) lines.push(`mask &= ${vals} <= ${f.max}`);
+    } else {
+      const excluded = f.excluded.filter(k=>k!==MISSING_KEY);
+      const dropMissing = f.excluded.includes(MISSING_KEY);
+      lines.push(`excluded${i} = ${pyList(excluded)}`);
+      lines.push(dropMissing
+        ? `mask &= ~(${col}.isin(excluded${i}) | ${col}.isna())`
+        : `mask &= ~${col}.isin(excluded${i})`);
+    }
+  });
+  lines.push(`ids = ${metaVar}.index[mask]`);
+  if(st.sortDir!==0){
+    const numeric = fieldIsNumeric(axis, st.sortField);
+    const col = `${metaVar}.loc[ids, ${pyRepr(st.sortField)}]`;
+    lines.push(numeric
+      ? `sort_key = pd.to_numeric(${col}, errors='coerce')`
+      : `sort_key = ${col}.astype(str)`);
+    lines.push(`ids = sort_key.sort_values(ascending=${st.sortDir===1}).index`);
+  }
+  lines.push(`table = table.filter(list(ids), axis='${axis}')`);
+  if(st.sortDir!==0) lines.push(`table = table.sort_order(list(ids), axis='${axis}')`);
+  return lines;
+}
+
+function buildExportCode(){
+  const axesActive = ['observation','sample'].filter(a=>axisState[a].filters.length || axisState[a].sortDir!==0);
+  const lines = ['import biom'];
+  if(axesActive.length) lines.push('import pandas as pd');
+  lines.push('', `table = biom.load_table(${pyRepr(meta.filename)})`, '');
+  if(!axesActive.length){
+    lines.push('# No sort or filter currently active in the viewer.');
+  } else {
+    axesActive.forEach((axis, i)=>{
+      lines.push(...buildAxisExportCode(axis));
+      if(i < axesActive.length-1) lines.push('');
+    });
+  }
+  return lines.join('\\n');
+}
+
+document.getElementById('exportBtn').onclick = ()=>{
+  document.getElementById('codeBlock').textContent = buildExportCode();
+  document.getElementById('codeOverlay').classList.add('open');
+};
+document.getElementById('codeCopy').onclick = ()=>{
+  navigator.clipboard.writeText(document.getElementById('codeBlock').textContent);
+};
+document.getElementById('codeClose').onclick = ()=>document.getElementById('codeOverlay').classList.remove('open');
+document.getElementById('codeOverlay').addEventListener('click', (e)=>{
+  if(e.target.id === 'codeOverlay') e.currentTarget.classList.remove('open');
+});
 
 function closeFilterPopover(){
   const existing = document.getElementById('filterPopover');
