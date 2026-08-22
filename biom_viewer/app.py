@@ -239,7 +239,44 @@ def build_export_table(spec):
         if deleted:
             table.del_metadata(keys=deleted, axis=axis)
 
+        # to_hdf5() requires every id on an axis to have the exact same
+        # metadata *keys* (not just non-null values) -- real-world biom
+        # files routinely have per-id metadata dicts that disagree (an
+        # optional field present on some ids, absent on others), which
+        # to_hdf5() rejects outright rather than writing a partial file.
+        # Since the write is not transactional, hitting that error mid-write
+        # used to leave a truncated, unopenable .biom at the destination.
+        # Filling every id in to the union of keys (missing = None) makes
+        # the categories consistent without changing any existing value.
+        entries = table.metadata(axis=axis)
+        if entries:
+            all_keys = set()
+            for e in entries:
+                if e:
+                    all_keys.update(e.keys())
+            filled = {}
+            for id_, e in zip(table.ids(axis=axis), entries):
+                entry = {k: None for k in all_keys}
+                entry.update(e or {})
+                filled[id_] = entry
+            table.add_metadata(filled, axis=axis)
+
     return table
+
+
+def write_biom_file(table, path):
+    # Write to a sibling temp file and rename into place only on success --
+    # to_hdf5() is not transactional, so a mid-write failure (see
+    # build_export_table's docstring) must never leave a truncated file
+    # sitting at the destination the user picked.
+    tmp_path = path + ".tmp"
+    try:
+        with biom.util.biom_open(tmp_path, "w") as f:
+            table.to_hdf5(f, "biom-viewer export")
+        os.replace(tmp_path, path)
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
 
 
 class Api:
@@ -275,9 +312,11 @@ class Api:
         if not result:
             return {"ok": False}
         path = result[0] if isinstance(result, (list, tuple)) else result
-        table = build_export_table(spec)
-        with biom.util.biom_open(path, "w") as f:
-            table.to_hdf5(f, "biom-viewer export")
+        try:
+            table = build_export_table(spec)
+            write_biom_file(table, path)
+        except Exception as exc:  # noqa: BLE001 -- surface to the UI instead of silently dropping
+            return {"ok": False, "error": str(exc)}
         return {"ok": True, "path": path}
 
 
@@ -1568,9 +1607,8 @@ function buildExportSpec(){
 async function exportBiomFile(){
   try{
     const res = await window.pywebview.api.export_table(buildExportSpec());
-    if(res && res.ok){
-      showSelected(`Exported to ${res.path}`);
-    }
+    if(res && res.ok) showSelected(`Exported to ${res.path}`);
+    else if(res && res.error) showSelected(`Export failed: ${res.error}`);
   } catch(err){
     showSelected(`Export failed: ${err}`);
   }

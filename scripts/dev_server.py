@@ -50,11 +50,13 @@ def _dev_export(spec):
     # No native save dialog here -- write to a temp path instead, so the
     # export flow (spec -> build_export_table -> .biom on disk) can be
     # exercised the same way data_window etc. are: over HTTP, from a browser.
-    table = bv.build_export_table(spec)
     fd, path = tempfile.mkstemp(suffix=".biom", prefix="biom-viewer-dev-export-")
     os.close(fd)
-    with biom.util.biom_open(path, "w") as f:
-        table.to_hdf5(f, "biom-viewer dev export")
+    try:
+        table = bv.build_export_table(spec)
+        bv.write_biom_file(table, path)
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": str(exc)}
     return {"ok": True, "path": path}
 
 
