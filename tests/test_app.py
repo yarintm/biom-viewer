@@ -200,3 +200,30 @@ def test_field_summary_numeric_field_treats_na_string_as_missing():
     assert s["min"] == 3.0
     assert s["max"] == 11.0
     assert sum(b["count"] for b in s["histogram"]) == 9
+
+
+def test_build_export_table_applies_filter_sort_rename_delete_replace():
+    app.TABLE = make_table_with_sample_metadata()
+    spec = {
+        "sample": {
+            # keep s2..s5, reversed order
+            "ids": ["s5", "s4", "s3", "s2"],
+            "replacements": [{"field": "habitat", "find": "habitat", "replace": "H"}],
+            "renames": {"ph": "pH"},
+            "deletedFields": [],
+        },
+        "observation": {
+            "ids": None,
+            "replacements": [],
+            "renames": {},
+            "deletedFields": ["taxonomy"],  # field that doesn't exist -- must not error
+        },
+    }
+    table = app.build_export_table(spec)
+    assert list(table.ids(axis="sample")) == ["s5", "s4", "s3", "s2"]
+    md = dict(zip(table.ids(axis="sample"), table.metadata(axis="sample")))
+    assert md["s3"]["habitat"] == "H3"
+    assert md["s3"]["pH"] == 3.0
+    assert "ph" not in md["s3"]
+    # observation axis untouched aside from the (no-op) delete
+    assert list(table.ids(axis="observation")) == ["o1", "o2"]
