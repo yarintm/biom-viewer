@@ -7,6 +7,7 @@ from collections import Counter
 
 import biom
 import webview
+from webview.menu import Menu, MenuAction, MenuSeparator
 
 TABLE = None
 FILENAME = ""
@@ -417,11 +418,6 @@ PAGE = """<!doctype html>
       <button data-m="row">Row metadata</button>
       <button data-m="col">Col metadata</button>
     </span>
-    <button class="tool" id="replaceBtn" title="Find &amp; replace in metadata (⌘R)">⇄</button>
-    <button class="tool" id="exportBtn" title="Export current sort/filter as Python code (⌘E)">&lt;/&gt;</button>
-    <button class="tool" id="themeBtn">🌙 dark</button>
-    <button class="tool" id="fontDown">A-</button>
-    <button class="tool" id="fontUp">A+</button>
   </span>
 </div>
 <div id="axisChips"></div>
@@ -1356,10 +1352,10 @@ function buildExportCode(){
   return lines.join('\\n');
 }
 
-document.getElementById('exportBtn').onclick = ()=>{
+function openExportModal(){
   document.getElementById('codeBlock').textContent = buildExportCode();
   document.getElementById('codeOverlay').classList.add('open');
-};
+}
 document.getElementById('codeCopy').onclick = ()=>{
   navigator.clipboard.writeText(document.getElementById('codeBlock').textContent);
 };
@@ -1584,12 +1580,12 @@ function removeReplacement(axis, field){
   renderRpList();
 }
 
-document.getElementById('replaceBtn').onclick = ()=>{
+function openReplaceModal(){
   populateRpFields();
   renderRpList();
   document.getElementById('replaceOverlay').classList.add('open');
   document.getElementById('rpFind').focus();
-};
+}
 document.getElementById('rpAxis').addEventListener('change', populateRpFields);
 document.getElementById('rpApply').onclick = ()=>{
   const axis = document.getElementById('rpAxis').value;
@@ -1660,35 +1656,24 @@ window.addEventListener('resize', ()=>{
   resizeT = setTimeout(()=>{ rowPage=0; colPage=0; render(); }, 150);
 });
 
-const themeBtn = document.getElementById('themeBtn');
 const systemDark = window.matchMedia('(prefers-color-scheme: dark)');
-// label shows the theme in effect; follows the system until the user overrides
-function themeLabel(){
-  const t = document.documentElement.dataset.theme || (systemDark.matches ? 'dark' : 'light');
-  themeBtn.textContent = t === 'dark' ? '🌙 dark' : '☀️ light';
-}
-themeBtn.onclick = ()=>{
+function toggleTheme(){
   const dark = (document.documentElement.dataset.theme || (systemDark.matches ? 'dark' : 'light')) === 'dark';
   document.documentElement.dataset.theme = dark ? 'light' : 'dark';
-  themeLabel();
-};
-systemDark.addEventListener('change', themeLabel);
-themeLabel();
+}
 
 function setFontSize(px){
   fontSize = Math.max(8, Math.min(28, px));
   document.documentElement.style.setProperty('--fs', fontSize+'px');
   rowPage=0; colPage=0; render();
 }
-document.getElementById('fontUp').onclick = ()=>setFontSize(fontSize+1);
-document.getElementById('fontDown').onclick = ()=>setFontSize(fontSize-1);
 
 document.addEventListener('keydown', (e)=>{
   const mod = e.metaKey || e.ctrlKey;
   if(!mod) return;
   if(e.key==='f'){ e.preventDefault(); document.getElementById('searchBox').focus(); }
-  else if(e.key==='r'){ e.preventDefault(); document.getElementById('replaceBtn').click(); }
-  else if(e.key==='e'){ e.preventDefault(); document.getElementById('exportBtn').click(); }
+  else if(e.key==='r'){ e.preventDefault(); openReplaceModal(); }
+  else if(e.key==='e'){ e.preventDefault(); openExportModal(); }
   else if(e.key==='=' || e.key==='+'){ e.preventDefault(); setFontSize(fontSize+1); }
   else if(e.key==='-'){ e.preventDefault(); setFontSize(fontSize-1); }
 });
@@ -1729,9 +1714,32 @@ def main():
     FILENAME = path
 
     title = f"BIOM Viewer — {os.path.basename(path)}"
-    webview.create_window(title, html=PAGE, js_api=Api(), width=1280, height=820, min_size=(600, 400))
+    window = webview.create_window(title, html=PAGE, js_api=Api(), width=1280, height=820, min_size=(600, 400))
     _set_dock_icon()
-    webview.start()
+
+    def js(code):
+        return lambda: window.evaluate_js(code)
+
+    # Replaces pywebview's default Edit/View menus (Cut/Copy/Paste/Fullscreen)
+    # with the app's own actions -- native menu items can't carry a Cocoa key
+    # equivalent through pywebview's public API, so ⌘-shortcuts stay bound in
+    # the page's own keydown listener; these menu items are for discovery/click.
+    webview.settings["SHOW_DEFAULT_MENUS"] = False
+    menu = [
+        Menu("Edit", [
+            MenuAction("Find…", js("document.getElementById('searchBox').focus()")),
+            MenuAction("Find & Replace…", js("openReplaceModal()")),
+        ]),
+        Menu("View", [
+            MenuAction("Toggle Theme", js("toggleTheme()")),
+            MenuSeparator(),
+            MenuAction("Increase Font Size", js("setFontSize(fontSize+1)")),
+            MenuAction("Decrease Font Size", js("setFontSize(fontSize-1)")),
+            MenuSeparator(),
+            MenuAction("Export as Python…", js("openExportModal()")),
+        ]),
+    ]
+    webview.start(menu=menu)
 
 
 if __name__ == "__main__":
