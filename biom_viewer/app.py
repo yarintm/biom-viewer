@@ -346,21 +346,27 @@ PAGE = """<!doctype html>
      top row) blue — in data mode both are on screen at once */
   body.mode-row .rh,body.mode-data .rh{background:var(--row-meta-bg);color:var(--row-meta);border-color:var(--row-meta)}
   body.mode-col .hdr.colhdr,body.mode-data .hdr.colhdr{background:var(--col-meta-bg);color:var(--col-meta);border-color:var(--col-meta)}
-  #metaOverlay{position:fixed;inset:0;background:rgba(0,0,0,.45);display:none;
+  #replaceOverlay{position:fixed;inset:0;background:rgba(0,0,0,.45);display:none;
                align-items:center;justify-content:center;z-index:10}
-  #metaOverlay.open{display:flex}
-  #metaModal{background:var(--panel-bg);border:1px solid var(--border);border-radius:8px;
-             width:360px;max-width:90vw;box-shadow:0 12px 40px rgba(0,0,0,.35)}
-  #metaModal header{display:flex;align-items:center;justify-content:space-between;
+  #replaceOverlay.open{display:flex}
+  #replaceModal{background:var(--panel-bg);border:1px solid var(--border);border-radius:8px;
+             width:420px;max-width:92vw;box-shadow:0 12px 40px rgba(0,0,0,.35)}
+  #replaceModal header{display:flex;align-items:center;justify-content:space-between;
                      padding:12px 14px;border-bottom:1px solid var(--border)}
-  #metaModal header h3{margin:0;font-size:14px}
-  #metaModal .x{cursor:pointer;color:var(--dim);font-size:16px;line-height:1;background:none;border:none}
-  #metaModal .x:hover{color:var(--fg)}
-  #metaModal .rows{padding:10px 14px 14px;display:grid;grid-template-columns:auto 1fr;
-                    gap:6px 12px;font-size:12.5px;max-height:44vh;overflow-y:auto}
-  #metaModal .rows dt{color:var(--dim);white-space:nowrap}
-  #metaModal .rows dd{margin:0;font-family:ui-monospace,monospace;word-break:break-word}
-  #metaModal .empty{padding:0 14px 14px;color:var(--dim);font-size:12.5px}
+  #replaceModal header h3{margin:0;font-size:14px}
+  #replaceModal .x{cursor:pointer;color:var(--dim);font-size:16px;line-height:1;background:none;border:none}
+  #replaceModal .x:hover{color:var(--fg)}
+  #replaceModal .rp-form{padding:12px 14px;display:flex;flex-wrap:wrap;gap:6px}
+  #replaceModal .rp-form select, #replaceModal .rp-form input{background:var(--input-bg);color:var(--fg);
+             border:1px solid var(--input-border);border-radius:4px;padding:4px 6px;font-size:12.5px}
+  #replaceModal .rp-form select{flex:1 1 100%}
+  #replaceModal .rp-form input{flex:1 1 45%;min-width:0}
+  #replaceModal .rp-form button{flex:0 0 auto}
+  #rpList{padding:0 14px 14px;display:flex;flex-direction:column;gap:4px;max-height:30vh;overflow-y:auto}
+  #rpList .rp-item{display:flex;align-items:center;justify-content:space-between;gap:8px;
+             background:var(--hl);border-radius:6px;padding:4px 8px;font-size:12px}
+  #rpList .rp-item button{background:none;border:none;color:var(--dim);cursor:pointer;font-size:12px}
+  #rpList .rp-item button:hover{color:var(--fg)}
   #codeOverlay{position:fixed;inset:0;background:rgba(0,0,0,.45);display:none;
                align-items:center;justify-content:center;z-index:10}
   #codeOverlay.open{display:flex}
@@ -411,8 +417,8 @@ PAGE = """<!doctype html>
       <button data-m="row">Row metadata</button>
       <button data-m="col">Col metadata</button>
     </span>
-    <button class="tool" id="metaBtn" title="Table metadata">ⓘ</button>
-    <button class="tool" id="exportBtn" title="Export current sort/filter as Python code">&lt;/&gt;</button>
+    <button class="tool" id="replaceBtn" title="Find &amp; replace in metadata (⌘R)">⇄</button>
+    <button class="tool" id="exportBtn" title="Export current sort/filter as Python code (⌘E)">&lt;/&gt;</button>
     <button class="tool" id="themeBtn">🌙 dark</button>
     <button class="tool" id="fontDown">A-</button>
     <button class="tool" id="fontUp">A+</button>
@@ -436,13 +442,23 @@ PAGE = """<!doctype html>
     <div id="grid"></div>
   </div>
 </div>
-<div id="metaOverlay">
-  <div id="metaModal">
+<div id="replaceOverlay">
+  <div id="replaceModal">
     <header>
-      <h3 id="metaTitle">Metadata</h3>
-      <button class="x" id="metaClose">✕</button>
+      <h3>Find &amp; Replace</h3>
+      <button class="x" id="replaceClose">✕</button>
     </header>
-    <dl class="rows" id="metaRows"></dl>
+    <div class="rp-form">
+      <select id="rpAxis">
+        <option value="observation">Observation (row) metadata</option>
+        <option value="sample">Sample (col) metadata</option>
+      </select>
+      <select id="rpField"></select>
+      <input id="rpFind" type="text" placeholder="Find…">
+      <input id="rpReplace" type="text" placeholder="Replace with…">
+      <button class="tool" id="rpApply">Apply</button>
+    </div>
+    <div id="rpList"></div>
   </div>
 </div>
 <div id="codeOverlay">
@@ -570,8 +586,8 @@ let rowFields=[], colFields=[];
 // to the same axis's rows in data mode. `field_summary`'s numeric/categorical
 // detection is reused for filter input type; see fieldIsNumeric().
 let axisState = {
-  observation: { sortField: null, sortDir: 0, filters: [] }, // sortDir: 0=off, 1=asc, -1=desc
-  sample: { sortField: null, sortDir: 0, filters: [] },
+  observation: { sortField: null, sortDir: 0, filters: [], replacements: [] }, // sortDir: 0=off, 1=asc, -1=desc
+  sample: { sortField: null, sortDir: 0, filters: [], replacements: [] },
 };
 // filters entries: {field, kind:'numeric', min, max} or {field, kind:'categorical', text}
 
@@ -593,7 +609,7 @@ function resolveAxisPosition(axis, rawIdx){
   if(!vis) return rawIdx;
   const pos = vis.indexOf(rawIdx);
   if(pos>=0) return pos;
-  axisState[axis] = { sortField: null, sortDir: 0, filters: [] };
+  axisState[axis] = { sortField: null, sortDir: 0, filters: [], replacements: [] };
   recomputeVisible(axis);
   renderAxisChips();
   return rawIdx;
@@ -658,16 +674,29 @@ function formatMetaValue(v){
   return {text:v, cls:'mv'};
 }
 
+// Find/replace is a display-only substring substitution over a field's
+// values -- it doesn't touch meta.row_metadata/col_metadata, so sorting,
+// filtering, and stats keep seeing the original values.
+function applyReplacements(axis, field, v){
+  const reps = axisState[axis].replacements.filter(r=>r.field===field);
+  if(!reps.length || v===null || v===undefined) return v;
+  let s = String(v);
+  reps.forEach(r=>{ s = s.split(r.find).join(r.replace); });
+  return s;
+}
+
 function metaCellAt(i, j){
   // i = row index (grid row), j = col index (grid col)
   if(mode==='row'){
     // row axis = observation obsAt(i), col axis = field j (fields unaffected by filters)
     const entry = meta.row_metadata && meta.row_metadata[obsAt(i)];
-    return entry ? entry[rowFields[j]] : null;
+    const field = rowFields[j];
+    return entry ? applyReplacements('observation', field, entry[field]) : null;
   }
   // mode==='col': row axis = field i (unaffected), col axis = sample sampleAt(j)
   const entry = meta.col_metadata && meta.col_metadata[sampleAt(j)];
-  return entry ? entry[colFields[i]] : null;
+  const field = colFields[i];
+  return entry ? applyReplacements('sample', field, entry[field]) : null;
 }
 
 // Missing-value tokens, mirrored from the backend's _MISSING_TOKENS
@@ -1234,13 +1263,17 @@ function renderAxisChips(){
       chips.push(`<span class="chip">${axis}: ${escapeHtml(filterChipLabel(axis, f))}` +
         `<button class="chip-x" data-kind="filter" data-axis="${axis}" data-field="${escapeHtml(f.field)}">✕</button></span>`);
     });
+    st.replacements.forEach(r=>{
+      chips.push(`<span class="chip">${axis}: ${escapeHtml(r.field)} "${escapeHtml(r.find)}"→"${escapeHtml(r.replace)}"` +
+        `<button class="chip-x" data-kind="replace" data-axis="${axis}" data-field="${escapeHtml(r.field)}">✕</button></span>`);
+    });
   });
   el.innerHTML = chips.join('');
   el.style.display = chips.length ? 'flex' : 'none';
   el.querySelectorAll('.chip-x').forEach(btn=>{
-    btn.onclick = ()=> btn.dataset.kind==='sort'
-      ? removeSort(btn.dataset.axis)
-      : removeFilter(btn.dataset.axis, btn.dataset.field);
+    if(btn.dataset.kind==='sort') btn.onclick = ()=>removeSort(btn.dataset.axis);
+    else if(btn.dataset.kind==='replace') btn.onclick = ()=>removeReplacement(btn.dataset.axis, btn.dataset.field);
+    else btn.onclick = ()=>removeFilter(btn.dataset.axis, btn.dataset.field);
   });
 }
 
@@ -1258,11 +1291,20 @@ function pyList(arr){ return '[' + arr.map(pyRepr).join(', ') + ']'; }
 
 function buildAxisExportCode(axis){
   const st = axisState[axis];
-  if(!st.filters.length && st.sortDir===0) return null;
+  const hasSortOrFilter = st.filters.length || st.sortDir!==0;
+  if(!hasSortOrFilter && !st.replacements.length) return null;
   const metaVar = axis==='observation' ? 'obs_meta' : 'samp_meta';
   const lines = [];
-  lines.push(`# --- ${axis} axis${st.filters.length ? ': '+st.filters.length+' filter(s)' : ''}${st.sortDir ? ', sorted by '+st.sortField : ''} ---`);
+  lines.push(`# --- ${axis} axis${st.replacements.length ? ': '+st.replacements.length+' replacement(s)' : ''}${st.filters.length ? ', '+st.filters.length+' filter(s)' : ''}${st.sortDir ? ', sorted by '+st.sortField : ''} ---`);
   lines.push(`${metaVar} = table.metadata_to_dataframe('${axis}')`);
+  st.replacements.forEach(r=>{
+    const col = `${metaVar}[${pyRepr(r.field)}]`;
+    lines.push(`${col} = ${col}.astype(str).str.replace(${pyRepr(r.find)}, ${pyRepr(r.replace)}, regex=False)`);
+  });
+  if(!hasSortOrFilter){
+    lines.push(`table.add_metadata(${metaVar}.to_dict(orient='index'), axis='${axis}')`);
+    return lines;
+  }
   lines.push(`mask = pd.Series(True, index=${metaVar}.index)`);
   st.filters.forEach((f, i)=>{
     const col = `${metaVar}[${pyRepr(f.field)}]`;
@@ -1296,12 +1338,15 @@ function buildAxisExportCode(axis){
 }
 
 function buildExportCode(){
-  const axesActive = ['observation','sample'].filter(a=>axisState[a].filters.length || axisState[a].sortDir!==0);
+  const axesActive = ['observation','sample'].filter(a=>{
+    const st = axisState[a];
+    return st.filters.length || st.sortDir!==0 || st.replacements.length;
+  });
   const lines = ['import biom'];
   if(axesActive.length) lines.push('import pandas as pd');
   lines.push('', `table = biom.load_table(${pyRepr(meta.filename)})`, '');
   if(!axesActive.length){
-    lines.push('# No sort or filter currently active in the viewer.');
+    lines.push('# No sort, filter, or find/replace currently active in the viewer.');
   } else {
     axesActive.forEach((axis, i)=>{
       lines.push(...buildAxisExportCode(axis));
@@ -1509,35 +1554,60 @@ function applyHighlight(){
   });
 }
 
-function openMeta(title, fields){
-  document.getElementById('metaTitle').textContent = title;
-  const rows = document.getElementById('metaRows');
-  rows.innerHTML = '';
-  const entries = Object.entries(fields).filter(([,v])=>v!==null && v!==undefined && v!=='');
-  if(!entries.length){
-    rows.outerHTML = '<div class="empty" id="metaRows">No metadata.</div>';
-  } else {
-    entries.forEach(([k,v])=>{
-      const dt = document.createElement('dt'); dt.textContent = k;
-      const dd = document.createElement('dd');
-      dd.textContent = Array.isArray(v) ? v.join(', ') : v;
-      rows.append(dt, dd);
-    });
-  }
-  document.getElementById('metaOverlay').classList.add('open');
+function rpFieldsFor(axis){ return axis==='observation' ? rowFields : colFields; }
+
+function populateRpFields(){
+  const axis = document.getElementById('rpAxis').value;
+  const sel = document.getElementById('rpField');
+  sel.innerHTML = rpFieldsFor(axis).map(f=>`<option value="${escapeHtml(f)}">${escapeHtml(f)}</option>`).join('');
 }
 
-document.getElementById('metaBtn').onclick = ()=>{
-  openMeta('Table metadata', {
-    table_id: meta.table_id,
-    type: meta.table_type,
-    generated_by: meta.generated_by,
-    create_date: meta.create_date,
+function renderRpList(){
+  const items = [];
+  ['observation','sample'].forEach(axis=>{
+    axisState[axis].replacements.forEach(r=>{
+      items.push(`<div class="rp-item"><span>${escapeHtml(axis)}: ${escapeHtml(r.field)} — "${escapeHtml(r.find)}" → "${escapeHtml(r.replace)}"</span>` +
+        `<button data-axis="${axis}" data-field="${escapeHtml(r.field)}">✕</button></div>`);
+    });
   });
+  const el = document.getElementById('rpList');
+  el.innerHTML = items.join('');
+  el.querySelectorAll('button').forEach(btn=>{
+    btn.onclick = ()=> removeReplacement(btn.dataset.axis, btn.dataset.field);
+  });
+}
+
+function removeReplacement(axis, field){
+  axisState[axis].replacements = axisState[axis].replacements.filter(r=>r.field!==field);
+  render();
+  renderAxisChips();
+  renderRpList();
+}
+
+document.getElementById('replaceBtn').onclick = ()=>{
+  populateRpFields();
+  renderRpList();
+  document.getElementById('replaceOverlay').classList.add('open');
+  document.getElementById('rpFind').focus();
 };
-document.getElementById('metaClose').onclick = ()=>document.getElementById('metaOverlay').classList.remove('open');
-document.getElementById('metaOverlay').addEventListener('click', (e)=>{
-  if(e.target.id === 'metaOverlay') e.currentTarget.classList.remove('open');
+document.getElementById('rpAxis').addEventListener('change', populateRpFields);
+document.getElementById('rpApply').onclick = ()=>{
+  const axis = document.getElementById('rpAxis').value;
+  const field = document.getElementById('rpField').value;
+  const find = document.getElementById('rpFind').value;
+  const replace = document.getElementById('rpReplace').value;
+  if(!field || !find) return;
+  axisState[axis].replacements = axisState[axis].replacements.filter(r=>r.field!==field);
+  axisState[axis].replacements.push({field, find, replace});
+  document.getElementById('rpFind').value = '';
+  document.getElementById('rpReplace').value = '';
+  render();
+  renderAxisChips();
+  renderRpList();
+};
+document.getElementById('replaceClose').onclick = ()=>document.getElementById('replaceOverlay').classList.remove('open');
+document.getElementById('replaceOverlay').addEventListener('click', (e)=>{
+  if(e.target.id === 'replaceOverlay') e.currentTarget.classList.remove('open');
 });
 
 // 'row' mode only swaps the column axis, 'col' mode only swaps the row axis —
@@ -1612,6 +1682,16 @@ function setFontSize(px){
 }
 document.getElementById('fontUp').onclick = ()=>setFontSize(fontSize+1);
 document.getElementById('fontDown').onclick = ()=>setFontSize(fontSize-1);
+
+document.addEventListener('keydown', (e)=>{
+  const mod = e.metaKey || e.ctrlKey;
+  if(!mod) return;
+  if(e.key==='f'){ e.preventDefault(); document.getElementById('searchBox').focus(); }
+  else if(e.key==='r'){ e.preventDefault(); document.getElementById('replaceBtn').click(); }
+  else if(e.key==='e'){ e.preventDefault(); document.getElementById('exportBtn').click(); }
+  else if(e.key==='=' || e.key==='+'){ e.preventDefault(); setFontSize(fontSize+1); }
+  else if(e.key==='-'){ e.preventDefault(); setFontSize(fontSize-1); }
+});
 
 window.addEventListener('pywebviewready', loadMeta);
 </script>
