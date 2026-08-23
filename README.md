@@ -15,7 +15,10 @@
 </p>
 
 <p align="center">
-  <img src="docs/screenshot-dark.jpg" width="80%" alt="biom-viewer, dark mode">
+  <img src="docs/screenshot-dark.jpg" width="80%" alt="biom-viewer showing a 157,780 x 4,394 sparse table, dark mode">
+</p>
+<p align="center">
+  <img src="docs/screenshot-search.jpg" width="80%" alt="biom-viewer search across sample IDs and metadata values, dark mode">
 </p>
 
 `.biom` files store microbiome/observation data as sparse matrices —
@@ -31,6 +34,10 @@ Download the [latest release](https://github.com/yarintm/biom-viewer/releases/la
 unzip, drag `BiomViewer.app` to Applications. It's self-contained — no
 Python install required.
 
+Download counts per release are tracked automatically by GitHub — see the
+[releases page](https://github.com/yarintm/biom-viewer/releases) or run
+`gh release view --json assets`.
+
 To open `.biom` files by double-clicking: right-click one → **Get Info** →
 **Open with** → **BiomViewer** → **Change All…**.
 
@@ -45,8 +52,21 @@ biom-viewer path/to/table.biom
 
 - **▲ ▼** page through rows, **◀ ▶** through columns — page size auto-fits
   the window
-- Click a row, column, or cell to copy its full text and highlight it
-- 🌙/☀️ theme toggle, **A-**/**A+** font size
+- Click a row, column, or cell to copy its full text and highlight it;
+  **⤢** (⌘⏎) opens the selection full-size in its own window
+- **Data** / **Row metadata** / **Col metadata** mode switch
+- Search across sample/observation IDs and metadata values (⌘F), with
+  per-field results and a "show all" expansion
+- Double-click a row header for summary stats (histogram, top values); in
+  metadata mode, double-click a single field's row header to expand just
+  that field
+- Sort, filter, rename, or delete a metadata field from its column header
+- Find & replace across metadata values (⌘R), with undo/redo (⌘Z / ⇧⌘Z)
+- Export the current view as a Python snippet (⌘E) or as a new `.biom` file
+  (⌘S)
+- Theme toggle and font size (⌘+/⌘-) via the View menu
+- Open more `.biom` files (double-click in Finder, or CLI) as new windows
+  in the same running app
 
 ## Development
 
