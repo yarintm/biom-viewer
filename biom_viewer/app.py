@@ -633,8 +633,16 @@ let summaryVisible=false;
 // row to a stat summary (instead of summaryVisible's "expand every row").
 let expandedFieldRow=null;
 function anyFieldRowExpanded(){ return stripOnRows() || (mode==='col' && expandedFieldRow!=null); }
+// Expanding/collapsing a row changes rowsPerPage() (the expanded row eats
+// extra height budget), which shifts which fields "page N" covers -- so the
+// clicked row can silently scroll off the page it was just clicked on.
+// Recompute fit and re-center on r first, same fix toggleSummary already
+// needed for the same reason.
 function toggleFieldRow(r){
   expandedFieldRow = (expandedFieldRow===r) ? null : r;
+  computeFit();
+  const maxPage = Math.max(0, Math.ceil(rowsTotal()/rowsPerPage()) - 1);
+  rowPage = Math.min(Math.floor(r/rowsPerPage()), maxPage);
   render();
 }
 const GAP=14;
@@ -2101,7 +2109,13 @@ searchBox.addEventListener('keydown', (e)=>{
   else if(e.key==='Escape'){ results.classList.remove('open'); searchBox.blur(); }
 });
 document.addEventListener('click', (e)=>{
-  if(!document.getElementById('searchWrap').contains(e.target)){
+  // composedPath(), not searchWrap.contains(e.target): a click on something
+  // like .sr-more ("show all") re-renders #searchResults.innerHTML first
+  // (its own listener runs before this one, earlier in the bubble path),
+  // detaching e.target from the tree -- contains() would then report it as
+  // "outside" and immediately re-close the panel that render just reopened.
+  // composedPath() is captured at dispatch time, so it's unaffected by that.
+  if(!e.composedPath().includes(document.getElementById('searchWrap'))){
     document.getElementById('searchResults').classList.remove('open');
   }
 });
