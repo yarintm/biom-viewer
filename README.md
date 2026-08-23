@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/screenshot-dark.jpg" width="80%" alt="biom-viewer showing a 157,780 x 4,394 sparse table, dark mode">
+  <img src="docs/screenshot-dark.jpg" width="80%" alt="biom-viewer showing a sparse OTU table with taxonomy-lineage row IDs, dark mode">
 </p>
 <p align="center">
   <img src="docs/screenshot-search.jpg" width="80%" alt="biom-viewer search across sample IDs and metadata values, dark mode">
