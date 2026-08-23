@@ -488,7 +488,13 @@ PAGE = """<!doctype html>
                align-items:center;justify-content:center;z-index:10}
   .wm-overlay.open{display:flex}
   .wm-modal{background:var(--panel-bg);border:1px solid var(--border);border-radius:8px;
-             width:640px;max-width:92vw;box-shadow:0 12px 40px rgba(0,0,0,.35)}
+             width:640px;max-width:92vw;box-shadow:0 12px 40px rgba(0,0,0,.35);
+             /* pywebview disables selection app-wide by default (text_select=False,
+                see its injected `body{user-select:none}`) so the grid's own
+                click-to-copy paradigm doesn't fight drag-selection -- but content
+                in these windows exists specifically to be read/selected/copied,
+                so re-enable it here; a class selector beats that plain `body` one. */
+             -webkit-user-select:text;user-select:text;cursor:auto}
   .wm-modal header{display:flex;align-items:center;justify-content:flex-end;gap:8px;
                      padding:12px 14px;border-bottom:1px solid var(--border)}
   .wm-modal header h3{margin:0;font-size:14px;margin-right:auto}
@@ -1875,8 +1881,16 @@ function statCellHtml(s){
 
   const distinctPct = s.n ? Math.round(s.distinct/s.n*100) : 0;
   const presentTotal = s.n - s.missing;
-  const other = s.other_count
-    ? `<div class="stat-line stat-other" title="View all ${s.distinct} values">+${s.other_count} other</div>`
+  // The strip only ever renders the top 3 rows (topValueRows), regardless of
+  // how many the backend sent in `top` -- so "how many more" has to be
+  // counted against those 3, not against `top.length` or the backend's own
+  // other_count (which is relative to its top-10 cutoff). Otherwise ranks
+  // 4-10 silently vanish: neither shown above nor counted in the "+N" line.
+  const shownCount = s.top.slice(0, 3).length;
+  const otherDistinct = s.distinct - shownCount;
+  const otherRows = presentTotal - s.top.slice(0, 3).reduce((a, t) => a + t.count, 0);
+  const other = otherDistinct > 0
+    ? `<div class="stat-line stat-other" title="View all ${s.distinct} values">+${otherDistinct} more (${otherRows} rows)</div>`
     : '';
   return `<div class="stat-line">${presence}</div>` +
     `<div class="stat-line">Distinct <b>${s.distinct}</b> (${distinctPct}%)</div>` +
