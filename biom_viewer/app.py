@@ -441,6 +441,14 @@ let meta=null, rowPage=0, colPage=0, selR=null, selC=null, fontSize=11;
 let autoRows=20, autoCols=8, rowHPx=22, colWPx=130;
 let availH=0, availW=0;
 let summaryVisible=false;
+// In 'col' mode, double-clicking one row header expands just that field's
+// row to a stat summary (instead of summaryVisible's "expand every row").
+let expandedFieldRow=null;
+function anyFieldRowExpanded(){ return stripOnRows() || (mode==='col' && expandedFieldRow!=null); }
+function toggleFieldRow(r){
+  expandedFieldRow = (expandedFieldRow===r) ? null : r;
+  render();
+}
 const GAP=14;
 const COLW_TARGET=130, RHW_MIN=60, RHW_MAX=240;
 let RHW=RHW_MAX;
@@ -454,7 +462,7 @@ function colsPerPage(){ return autoCols; }
 // label so it doesn't waste space for no reason.
 let _rhwCache = null;
 function computeRHW(){
-  if(stripOnRows()) return RHW_MAX;
+  if(anyFieldRowExpanded()) return RHW_MAX;
   const key = mode+'|'+fontSize;
   if(_rhwCache && _rhwCache.key===key) return _rhwCache.val;
   const labels = mode==='col' ? colFields : (meta ? meta.row_ids : []);
@@ -477,14 +485,14 @@ function computeRHW(){
 // padding/gap/line-height values change, and it did.
 let _statRowHCache = null;
 function statRowH(){
-  const key = fontSize + '|' + stripOnRows();
+  const key = fontSize + '|' + anyFieldRowExpanded();
   if(_statRowHCache && _statRowHCache.key===key) return _statRowHCache.val;
   const worstCase = {missing:0, n:1, distinct:999,
     top:[{value:'x',count:1},{value:'x',count:1},{value:'x',count:1}], other_count:1};
   const probe = document.createElement('div');
-  probe.className = 'cell stat-cell' + (stripOnRows() ? ' rh-stats' : '');
+  probe.className = 'cell stat-cell' + (anyFieldRowExpanded() ? ' rh-stats' : '');
   probe.style.cssText = 'position:absolute;visibility:hidden;left:-9999px;top:-9999px;'
-    + `width:${stripOnRows() ? RHW_MAX : COLW_TARGET}px;`;
+    + `width:${anyFieldRowExpanded() ? RHW_MAX : COLW_TARGET}px;`;
   probe.innerHTML = (stripOnRows() ? '<div class="stat-line rh-label">X</div>' : '') + statCellHtml(worstCase);
   document.body.appendChild(probe);
   const val = Math.ceil(probe.getBoundingClientRect().height);
@@ -531,6 +539,11 @@ function computeFit(){
     // same as ever) -- only the field rows below it need the tall track,
     // so only they should compete for the height budget.
     autoRows = Math.max(1, Math.floor((availH - shortRowH) / statRowH()));
+  } else if(mode==='col' && expandedFieldRow!=null){
+    // One field row is expanded to a stat block; the rest stay short. This
+    // reserves the budget even if the expanded row isn't on the current
+    // page -- ponytail: slightly conservative, avoids a fit/page chicken-egg.
+    autoRows = Math.max(1, Math.floor((availH - shortRowH - statRowH()) / shortRowH) + 1);
   } else {
     const totalRowsTarget = Math.max(2, Math.floor(availH/shortRowH)); // includes header row
     autoRows = totalRowsTarget - 1;
@@ -580,6 +593,7 @@ const modeBtns = [...document.querySelectorAll('#modeGroup button')];
 
 function setMode(m){
   mode = m;
+  if(m!=='col') expandedFieldRow = null;
   modeBtns.forEach(x=>x.classList.toggle('active', x.dataset.m===m));
   document.body.className = 'mode-'+m;
   document.getElementById('modeTag').textContent =
@@ -991,12 +1005,20 @@ async function render(){
   // Stretch to fill availH x availW, but never past the auto-fit page size —
   // a partial last page keeps normal-height rows instead of ballooning.
   const renderedRows = r1-r0, renderedCols = c1-c0;
-  let headerRowHPx;
+  const fieldExpandedIdx = (mode==='col' && !stripOnRows() && expandedFieldRow!=null
+    && expandedFieldRow>=r0 && expandedFieldRow<r1) ? expandedFieldRow : null;
+  let headerRowHPx, rowHeights = null;
   if(stripOnRows()){
     // Column headers stay short; only the field rows below need the tall
     // track, so the header doesn't compete with them for height.
     headerRowHPx = Math.round(fontSize*1.3) + 8;
     rowHPx = Math.max(statRowH(), (availH - headerRowHPx) / Math.max(renderedRows, rowsPerPage()));
+  } else if(fieldExpandedIdx!=null){
+    // Only the expanded row gets the tall stat track; everyone else stays
+    // at natural short height instead of stretching to fill availH.
+    headerRowHPx = Math.round(fontSize*1.3) + 8;
+    rowHeights = [];
+    for(let r=r0;r<r1;r++) rowHeights.push(r===fieldExpandedIdx ? statRowH() : headerRowHPx);
   } else {
     rowHPx = availH/(Math.max(renderedRows, rowsPerPage())+1);
     headerRowHPx = rowHPx;
@@ -1011,12 +1033,16 @@ async function render(){
   const rowStats = stripOnRows()
     ? await Promise.all(Array.from({length: renderedRows}, (_, k) => window.pywebview.api.field_summary('sample', colFields[r0+k])))
     : null;
+  const fieldExpandedStat = fieldExpandedIdx!=null
+    ? await window.pywebview.api.field_summary('sample', colFields[fieldExpandedIdx])
+    : null;
 
   const grid = document.getElementById('grid');
   const statRowTrack = stripOnCols() ? `${statRowH()}px ` : '';
+  const rowsTrack = rowHeights ? rowHeights.map(h=>`${h}px`).join(' ') : `repeat(${renderedRows}, ${rowHPx}px)`;
   grid.classList.toggle('col-stats', stripOnCols());
   grid.style.gridTemplateColumns = `${RHW}px repeat(${renderedCols}, ${colWPx}px)`;
-  grid.style.gridTemplateRows = `${headerRowHPx}px ${statRowTrack}repeat(${renderedRows}, ${rowHPx}px)`;
+  grid.style.gridTemplateRows = `${headerRowHPx}px ${statRowTrack}${rowsTrack}`;
   grid.innerHTML = '';
 
   const corner = document.createElement('div');
@@ -1057,6 +1083,9 @@ async function render(){
     if(stripOnRows()){
       rh.classList.add('rh-stats');
       rh.innerHTML = `<div class="stat-line rh-label">${escapeHtml(label)}</div>` + statCellHtml(rowStats[r-r0]);
+    } else if(r===fieldExpandedIdx){
+      rh.classList.add('rh-stats');
+      rh.innerHTML = `<div class="stat-line rh-label">${escapeHtml(label)}</div>` + statCellHtml(fieldExpandedStat);
     } else if(mode==='col'){
       rh.innerHTML = `<span class="hdr-label">${escapeHtml(label)}</span>${axisControlsHtml('sample', label)}`;
     } else {
@@ -1070,7 +1099,10 @@ async function render(){
       showSelected(label);
       applyHighlight();
     });
-    rh.addEventListener('dblclick', ()=>{ toggleSummary(r); });
+    rh.addEventListener('dblclick', ()=>{
+      if(mode==='col') toggleFieldRow(r);
+      else toggleSummary(r);
+    });
     grid.appendChild(rh);
     for(let c=c0;c<c1;c++){
       const cell = document.createElement('div');
