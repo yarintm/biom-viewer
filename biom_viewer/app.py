@@ -3,6 +3,7 @@
 import math
 import os
 import sys
+import webbrowser
 from collections import Counter
 
 import biom
@@ -306,6 +307,16 @@ class Api:
     def field_summary(self, axis, field):
         return field_summary(axis, field)
 
+    def open_url(self, url):
+        # The right-click "Search Google" menu builds this URL itself (see
+        # openContextMenu in the frontend) rather than accepting an arbitrary
+        # one from anywhere else, so there's no untrusted-input surface here.
+        # Routed through Python's webbrowser rather than a JS window.open()/
+        # <a target=_blank> click because pywebview's cocoa backend only
+        # intercepts real link-navigation events for its "open externally"
+        # behavior, not window.open() -- this works regardless of backend.
+        webbrowser.open(url)
+
     def export_table(self, spec):
         default_name = os.path.splitext(os.path.basename(FILENAME))[0] + "_export.biom"
         result = self.window.create_file_dialog(
@@ -432,6 +443,12 @@ PAGE = """<!doctype html>
   #filterPopover.fp-checklist input.fp-search{width:100%}
   .fp-actions{display:flex;gap:4px}
   .fp-actions button{flex:1}
+  #ctxMenu{position:fixed;z-index:40;background:var(--panel-bg);border:1px solid var(--border);
+             border-radius:6px;box-shadow:0 8px 24px rgba(0,0,0,.3);padding:4px;min-width:160px}
+  .ctx-item{display:block;width:100%;text-align:left;background:none;border:none;color:var(--fg);
+             padding:6px 10px;border-radius:4px;cursor:pointer;font-size:12.5px;white-space:nowrap;
+             overflow:hidden;text-overflow:ellipsis}
+  .ctx-item:hover{background:var(--hl)}
   .fp-list{max-height:220px;overflow-y:auto;border:1px solid var(--input-border);border-radius:4px}
   .fp-row{display:flex;align-items:center;gap:6px;padding:3px 6px;font-size:12px;cursor:pointer}
   .fp-row:hover{background:var(--hl)}
@@ -1846,6 +1863,41 @@ document.getElementById('grid').addEventListener('click', (e)=>{
   if(editBtn){ e.stopPropagation(); openFieldPopover(editBtn.dataset.axis, editBtn.dataset.field, editBtn); return; }
 });
 
+function closeContextMenu(){
+  const existing = document.getElementById('ctxMenu');
+  if(existing) existing.remove();
+  return !!existing;
+}
+
+// The native right-click menu (WKWebView's default) doesn't offer a web
+// search on macOS the way Safari does -- just "Services" and the like (see
+// screenshot in the request this came from). A small in-page menu near the
+// cursor is simpler and more portable than fighting the native menu's
+// contents, and pywebview's cocoa backend only auto-opens external links
+// for real <a> navigations, not window.open() -- see Api.open_url's comment
+// for why the actual browser launch goes through Python instead.
+document.addEventListener('contextmenu', (e)=>{
+  const sel = window.getSelection().toString().trim();
+  const cellEl = e.target.closest('.cell, .wm-row, #cellBlock, #codeBlock, #selected');
+  const fallback = cellEl ? (cellEl.value !== undefined ? cellEl.value : cellEl.textContent).trim() : '';
+  const text = sel || fallback;
+  if(!text) return; // nothing relevant under the cursor -- let the native menu show
+  e.preventDefault();
+  closeContextMenu();
+  const menu = document.createElement('div');
+  menu.id = 'ctxMenu';
+  menu.style.left = e.clientX + 'px';
+  menu.style.top = e.clientY + 'px';
+  const short = text.length > 40 ? text.slice(0, 40) + '…' : text;
+  menu.innerHTML = `<button class="ctx-item">Search Google for "${escapeHtml(short)}"</button>`;
+  document.body.appendChild(menu);
+  menu.querySelector('.ctx-item').onclick = ()=>{
+    window.pywebview.api.open_url('https://www.google.com/search?q=' + encodeURIComponent(text));
+    closeContextMenu();
+  };
+});
+document.addEventListener('click', closeContextMenu);
+
 function miniHist(histogram){
   if(!histogram.length) return '';
   const max = Math.max(...histogram.map(b=>b.count), 1);
@@ -2077,6 +2129,7 @@ document.addEventListener('keydown', (e)=>{
   if(e.key==='Escape'){
     let handled = false;
     if(closeFilterPopover()) handled = true;
+    if(closeContextMenu()) handled = true;
     ['codeOverlay','replaceOverlay','cellOverlay','valuesOverlay'].forEach(id=>{
       const el = document.getElementById(id);
       if(el.classList.contains('open')){ el.classList.remove('open'); handled = true; }

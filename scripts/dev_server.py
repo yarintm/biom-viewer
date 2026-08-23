@@ -29,6 +29,7 @@ if(!window.pywebview){
     col_summary: (c) => post('/api/col_summary', {c}),
     field_summary: (axis, field) => post('/api/field_summary', {axis, field}),
     export_table: (spec) => post('/api/export_table', {spec}),
+    open_url: (url) => post('/api/open_url', {url}),
   }};
   window.dispatchEvent(new Event('pywebviewready'));
 }
@@ -43,6 +44,7 @@ API = {
     "/api/col_summary": lambda body: bv.col_summary(body["c"]),
     "/api/field_summary": lambda body: bv.field_summary(body["axis"], body["field"]),
     "/api/export_table": lambda body: _dev_export(body["spec"]),
+    "/api/open_url": lambda body: bv.Api().open_url(body["url"]) or {"ok": True},
 }
 
 
