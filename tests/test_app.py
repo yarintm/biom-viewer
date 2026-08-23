@@ -5,6 +5,10 @@ from biom_viewer import app
 from biom_viewer.app import _histogram, _numeric_summary
 
 
+def api(table, filename="fake.biom"):
+    return app.Api(table, filename)
+
+
 def make_table():
     # 3 observations (rows) x 4 samples (cols), mostly zero.
     data = np.array(
@@ -18,9 +22,7 @@ def make_table():
 
 
 def test_meta_reports_shape_and_ids():
-    app.TABLE = make_table()
-    app.FILENAME = "fake.biom"
-    m = app.meta()
+    m = api(make_table(), "fake.biom").meta()
     assert m["filename"] == "fake.biom"
     assert m["rows"] == 3
     assert m["cols"] == 4
@@ -29,40 +31,40 @@ def test_meta_reports_shape_and_ids():
 
 
 def test_data_window_returns_correct_dense_subset():
-    app.TABLE = make_table()
+    a = api(make_table())
     # full window
-    assert app.data_window(0, 3, 0, 4) == [
+    assert a.data_window(0, 3, 0, 4) == [
         [0, 1, 0, 0],
         [2, 0, 0, 5],
         [0, 0, 0, 0],
     ]
     # a sub-window, never touching the rest of the (sparse) matrix
-    assert app.data_window(1, 2, 1, 3) == [[0, 0]]
+    assert a.data_window(1, 2, 1, 3) == [[0, 0]]
 
 
 def test_data_window_clamps_out_of_range_bounds():
-    app.TABLE = make_table()
+    a = api(make_table())
     # r1/c1 past the table edge should clamp, not error
-    assert app.data_window(2, 10, 0, 10) == [[0, 0, 0, 0]]
+    assert a.data_window(2, 10, 0, 10) == [[0, 0, 0, 0]]
 
 
 def test_data_window_idx_arbitrary_unsorted_indices():
-    app.TABLE = make_table()
+    a = api(make_table())
     # rows [2, 0] (reversed, non-contiguous), cols [3, 1]
-    assert app.data_window_idx([2, 0], [3, 1]) == [
+    assert a.data_window_idx([2, 0], [3, 1]) == [
         [0, 0],
         [0, 1],
     ]
 
 
 def test_data_window_idx_single_element():
-    app.TABLE = make_table()
-    assert app.data_window_idx([1], [3]) == [[5]]
+    a = api(make_table())
+    assert a.data_window_idx([1], [3]) == [[5]]
 
 
 def test_data_window_idx_full_axis_matches_data_window():
-    app.TABLE = make_table()
-    assert app.data_window_idx([0, 1, 2], [0, 1, 2, 3]) == app.data_window(0, 3, 0, 4)
+    a = api(make_table())
+    assert a.data_window_idx([0, 1, 2], [0, 1, 2, 3]) == a.data_window(0, 3, 0, 4)
 
 
 def test_histogram_ten_equal_width_buckets():
@@ -100,8 +102,7 @@ def test_numeric_summary_empty_values():
 
 
 def test_row_summary_mixed_sparse_row():
-    app.TABLE = make_table()
-    s = app.row_summary(1)  # obs2: [2, 0, 0, 5]
+    s = api(make_table()).row_summary(1)  # obs2: [2, 0, 0, 5]
     assert s["kind"] == "numeric"
     assert s["n"] == 4
     assert s["nonzero"] == 2
@@ -114,8 +115,7 @@ def test_row_summary_mixed_sparse_row():
 
 
 def test_row_summary_all_zero_row():
-    app.TABLE = make_table()
-    s = app.row_summary(2)  # obs3: [0, 0, 0, 0]
+    s = api(make_table()).row_summary(2)  # obs3: [0, 0, 0, 0]
     assert s["nonzero"] == 0
     assert s["sparsity"] == 100.0
     assert s["min"] is None
@@ -124,8 +124,7 @@ def test_row_summary_all_zero_row():
 
 
 def test_col_summary_single_nonzero_value():
-    app.TABLE = make_table()
-    s = app.col_summary(0)  # s1: [0, 2, 0]
+    s = api(make_table()).col_summary(0)  # s1: [0, 2, 0]
     assert s["nonzero"] == 1
     assert s["sparsity"] == round(2 / 3 * 100, 1)
     assert s["min"] == s["max"] == 2.0
@@ -143,8 +142,7 @@ def make_table_with_sample_metadata():
 
 
 def test_field_summary_numeric_field_with_missing():
-    app.TABLE = make_table_with_sample_metadata()
-    s = app.field_summary("sample", "ph")
+    s = api(make_table_with_sample_metadata()).field_summary("sample", "ph")
     assert s["kind"] == "numeric"
     assert s["n"] == 12
     assert s["missing"] == 1
@@ -156,8 +154,7 @@ def test_field_summary_numeric_field_with_missing():
 
 
 def test_field_summary_categorical_field_top10_and_other_count():
-    app.TABLE = make_table_with_sample_metadata()
-    s = app.field_summary("sample", "habitat")
+    s = api(make_table_with_sample_metadata()).field_summary("sample", "habitat")
     assert s["kind"] == "categorical"
     assert s["n"] == 12
     assert s["missing"] == 0
@@ -173,8 +170,7 @@ def test_field_summary_numeric_field_treats_nan_as_missing():
     # marker for numeric columns; NaN must not poison sum/min/max/median.
     table = make_table_with_sample_metadata()
     table.metadata(axis="sample")[1]["ph"] = float("nan")  # was 1.0
-    app.TABLE = table
-    s = app.field_summary("sample", "ph")
+    s = api(table).field_summary("sample", "ph")
     assert s["kind"] == "numeric"
     assert s["n"] == 12
     assert s["missing"] == 2  # the original None plus the new NaN
@@ -192,8 +188,7 @@ def test_field_summary_numeric_field_treats_na_string_as_missing():
     meta = table.metadata(axis="sample")
     meta[1]["ph"] = "NA"  # was 1.0
     meta[2]["ph"] = "n/a"  # was 2.0
-    app.TABLE = table
-    s = app.field_summary("sample", "ph")
+    s = api(table).field_summary("sample", "ph")
     assert s["kind"] == "numeric"
     assert s["n"] == 12
     assert s["missing"] == 3  # the original None plus "NA" and "n/a"
@@ -203,7 +198,6 @@ def test_field_summary_numeric_field_treats_na_string_as_missing():
 
 
 def test_build_export_table_applies_filter_sort_rename_delete_replace():
-    app.TABLE = make_table_with_sample_metadata()
     spec = {
         "sample": {
             # keep s2..s5, reversed order
@@ -219,7 +213,7 @@ def test_build_export_table_applies_filter_sort_rename_delete_replace():
             "deletedFields": ["taxonomy"],  # field that doesn't exist -- must not error
         },
     }
-    table = app.build_export_table(spec)
+    table = app.build_export_table(make_table_with_sample_metadata(), spec)
     assert list(table.ids(axis="sample")) == ["s5", "s4", "s3", "s2"]
     md = dict(zip(table.ids(axis="sample"), table.metadata(axis="sample")))
     assert md["s3"]["habitat"] == "H3"
@@ -242,12 +236,12 @@ def test_build_export_table_normalizes_inconsistent_metadata_keys(tmp_path):
         {"taxonomy": "B", "confidence": 0.8},
         {"taxonomy": "C"},  # missing "confidence" entirely, not null
     ]
-    app.TABLE = biom.Table(data, ["o1", "o2", "o3"], ["s1", "s2"], observation_metadata=obs_md)
+    table = biom.Table(data, ["o1", "o2", "o3"], ["s1", "s2"], observation_metadata=obs_md)
     spec = {
         "observation": {"ids": None, "replacements": [], "renames": {"taxonomy": "name"}, "deletedFields": []},
         "sample": {"ids": None, "replacements": [], "renames": {}, "deletedFields": []},
     }
-    table = app.build_export_table(spec)
+    table = app.build_export_table(table, spec)
     md = dict(zip(table.ids(axis="observation"), table.metadata(axis="observation")))
     assert md["o3"]["name"] == "C"
     assert md["o3"]["confidence"] is None  # filled in, not dropped

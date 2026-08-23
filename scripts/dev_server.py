@@ -14,6 +14,8 @@ import biom
 
 from biom_viewer import app as bv
 
+API_INSTANCE = None  # set in main()
+
 # Defines window.pywebview.api to match the real pywebview bridge, backed by
 # fetch() calls instead — the app's own script is served byte-for-byte
 # unmodified, so what's tested here is exactly what ships.
@@ -37,14 +39,14 @@ if(!window.pywebview){
 """
 
 API = {
-    "/api/meta": lambda body: bv.meta(),
-    "/api/data_window": lambda body: bv.data_window(body["r0"], body["r1"], body["c0"], body["c1"]),
-    "/api/data_window_idx": lambda body: bv.data_window_idx(body["row_idxs"], body["col_idxs"]),
-    "/api/row_summary": lambda body: bv.row_summary(body["r"]),
-    "/api/col_summary": lambda body: bv.col_summary(body["c"]),
-    "/api/field_summary": lambda body: bv.field_summary(body["axis"], body["field"]),
+    "/api/meta": lambda body: API_INSTANCE.meta(),
+    "/api/data_window": lambda body: API_INSTANCE.data_window(body["r0"], body["r1"], body["c0"], body["c1"]),
+    "/api/data_window_idx": lambda body: API_INSTANCE.data_window_idx(body["row_idxs"], body["col_idxs"]),
+    "/api/row_summary": lambda body: API_INSTANCE.row_summary(body["r"]),
+    "/api/col_summary": lambda body: API_INSTANCE.col_summary(body["c"]),
+    "/api/field_summary": lambda body: API_INSTANCE.field_summary(body["axis"], body["field"]),
     "/api/export_table": lambda body: _dev_export(body["spec"]),
-    "/api/open_url": lambda body: bv.Api().open_url(body["url"]) or {"ok": True},
+    "/api/open_url": lambda body: API_INSTANCE.open_url(body["url"]) or {"ok": True},
 }
 
 
@@ -55,7 +57,7 @@ def _dev_export(spec):
     fd, path = tempfile.mkstemp(suffix=".biom", prefix="biom-viewer-dev-export-")
     os.close(fd)
     try:
-        table = bv.build_export_table(spec)
+        table = bv.build_export_table(API_INSTANCE._table, spec)
         bv.write_biom_file(table, path)
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "error": str(exc)}
@@ -98,11 +100,11 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
+    global API_INSTANCE
     if len(sys.argv) < 2:
         print("Usage: dev_server.py <file.biom> [port]", file=sys.stderr)
         sys.exit(1)
-    bv.TABLE = biom.load_table(sys.argv[1])
-    bv.FILENAME = sys.argv[1]
+    API_INSTANCE = bv.Api(biom.load_table(sys.argv[1]), sys.argv[1])
     port = int(sys.argv[2]) if len(sys.argv) > 2 else 8765
     # Single-threaded on purpose: pywebview's real JS<->Python bridge
     # dispatches calls sequentially too, so this matches production

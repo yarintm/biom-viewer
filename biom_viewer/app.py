@@ -2,16 +2,15 @@
 """Lazy-loading BIOM viewer: native window (pywebview) + biom-format, sparse-window slicing, canvas grid UI."""
 import math
 import os
+import socket
 import sys
+import threading
 import webbrowser
 from collections import Counter
 
 import biom
 import webview
 from webview.menu import Menu, MenuAction, MenuSeparator
-
-TABLE = None
-FILENAME = ""
 
 
 def _json_safe(v):
@@ -66,69 +65,12 @@ def _numeric_summary(values, total):
     }
 
 
-# ponytail: whole id list sent once (text-only, cheap even at ~1e5 rows); paginate if a table
-# ever has >~500k ids and this becomes a multi-MB response.
-def meta():
-    obs_ids = TABLE.ids("observation").tolist()
-    sample_ids = TABLE.ids("sample").tolist()
-    obs_meta = TABLE.metadata(axis="observation")
-    sample_meta = TABLE.metadata(axis="sample")
-    return {
-        "filename": FILENAME,
-        "rows": TABLE.shape[0],
-        "cols": TABLE.shape[1],
-        "row_ids": obs_ids,
-        "col_ids": sample_ids,
-        "table_id": TABLE.table_id,
-        "table_type": TABLE.type,
-        "generated_by": TABLE.generated_by,
-        "create_date": str(TABLE.create_date) if TABLE.create_date else None,
-        "row_metadata": [_json_safe(dict(m)) for m in obs_meta] if obs_meta else None,
-        "col_metadata": [_json_safe(dict(m)) for m in sample_meta] if sample_meta else None,
-    }
-
-
-def data_window(r0, r1, c0, c1):
-    r1 = min(r1, TABLE.shape[0])
-    c1 = min(c1, TABLE.shape[1])
-    # Densify only the requested window, never the full matrix.
-    sub = TABLE.matrix_data[r0:r1, :].tocsc()[:, c0:c1]
-    return sub.toarray().tolist()
-
-
-def data_window_idx(row_idxs, col_idxs):
-    # Gather arbitrary (unsorted, non-contiguous) row/col index lists —
-    # used once either axis has an active sort or filter, since the visible
-    # page no longer maps to a contiguous matrix range. Densify only the
-    # requested submatrix, same as data_window.
-    sub = TABLE.matrix_data.tocsr()[row_idxs, :].tocsc()[:, col_idxs]
-    return sub.toarray().tolist()
-
-
 def _axis_summary(vec, total):
     values = [float(v) for v in vec.data if v != 0]
     summary = _numeric_summary(values, total)
     summary["nonzero"] = len(values)
     summary["sparsity"] = round((total - len(values)) / total * 100, 1) if total else 0.0
     return summary
-
-
-def row_summary(r):
-    return _axis_summary(TABLE.matrix_data.tocsr()[r, :], TABLE.shape[1])
-
-
-_csc_cache = {"table": None, "matrix": None}
-
-
-def _csc():
-    if _csc_cache["table"] is not TABLE:
-        _csc_cache["table"] = TABLE
-        _csc_cache["matrix"] = TABLE.matrix_data.tocsc()
-    return _csc_cache["matrix"]
-
-
-def col_summary(c):
-    return _axis_summary(_csc()[:, c], TABLE.shape[0])
 
 
 def _is_numeric(v):
@@ -162,8 +104,8 @@ def _is_missing(v):
     return False
 
 
-def field_summary(axis, field):
-    entries = TABLE.metadata(axis=axis)
+def field_summary(table, axis, field):
+    entries = table.metadata(axis=axis)
     total = len(entries)
     raw = [(dict(e) if e else {}).get(field) for e in entries]
     present = [v for v in raw if not _is_missing(v)]
@@ -193,7 +135,7 @@ def field_summary(axis, field):
     }
 
 
-def build_export_table(spec):
+def build_export_table(table, spec):
     # spec: {'observation': {...}, 'sample': {...}}, each with:
     #   ids: list[str] | None (filtered/sorted id order; None = unchanged)
     #   replacements: [{field, find, replace}]
@@ -203,7 +145,7 @@ def build_export_table(spec):
     # comment for why replacements/renames/deletes go through add_metadata
     # (merge-by-key) plus an explicit del_metadata for the keys that should
     # actually disappear (add_metadata alone never removes a key).
-    table = TABLE.copy()
+    table = table.copy()
     for axis in ("observation", "sample"):
         s = spec.get(axis) or {}
         ids = s.get("ids")
@@ -285,27 +227,70 @@ def write_biom_file(table, path):
 
 
 class Api:
-    """Exposed to the frontend as window.pywebview.api.* — no HTTP server involved."""
+    """Exposed to the frontend as window.pywebview.api.* — no HTTP server involved.
 
-    window = None  # set in main() once webview.create_window() returns
+    One instance per open file/window (see open_window()) -- table and
+    filename are instance state, not module globals, so multiple windows in
+    the same process each stay bound to their own file.
+    """
 
+    def __init__(self, table, filename):
+        self._table = table
+        self._filename = filename
+        self.window = None  # set by open_window() once create_window() returns
+        self._csc_matrix = None
+
+    # ponytail: id list sent once (text-only, cheap even at ~1e5 rows); paginate if a table
+    # ever has >~500k ids and this becomes a multi-MB response.
     def meta(self):
-        return meta()
+        table = self._table
+        obs_ids = table.ids("observation").tolist()
+        sample_ids = table.ids("sample").tolist()
+        obs_meta = table.metadata(axis="observation")
+        sample_meta = table.metadata(axis="sample")
+        return {
+            "filename": self._filename,
+            "rows": table.shape[0],
+            "cols": table.shape[1],
+            "row_ids": obs_ids,
+            "col_ids": sample_ids,
+            "table_id": table.table_id,
+            "table_type": table.type,
+            "generated_by": table.generated_by,
+            "create_date": str(table.create_date) if table.create_date else None,
+            "row_metadata": [_json_safe(dict(m)) for m in obs_meta] if obs_meta else None,
+            "col_metadata": [_json_safe(dict(m)) for m in sample_meta] if sample_meta else None,
+        }
 
     def data_window(self, r0, r1, c0, c1):
-        return data_window(r0, r1, c0, c1)
+        table = self._table
+        r1 = min(r1, table.shape[0])
+        c1 = min(c1, table.shape[1])
+        # Densify only the requested window, never the full matrix.
+        sub = table.matrix_data[r0:r1, :].tocsc()[:, c0:c1]
+        return sub.toarray().tolist()
 
     def data_window_idx(self, row_idxs, col_idxs):
-        return data_window_idx(row_idxs, col_idxs)
+        # Gather arbitrary (unsorted, non-contiguous) row/col index lists —
+        # used once either axis has an active sort or filter, since the
+        # visible page no longer maps to a contiguous matrix range. Densify
+        # only the requested submatrix, same as data_window.
+        sub = self._table.matrix_data.tocsr()[row_idxs, :].tocsc()[:, col_idxs]
+        return sub.toarray().tolist()
 
     def row_summary(self, r):
-        return row_summary(r)
+        return _axis_summary(self._table.matrix_data.tocsr()[r, :], self._table.shape[1])
+
+    def _csc(self):
+        if self._csc_matrix is None:
+            self._csc_matrix = self._table.matrix_data.tocsc()
+        return self._csc_matrix
 
     def col_summary(self, c):
-        return col_summary(c)
+        return _axis_summary(self._csc()[:, c], self._table.shape[0])
 
     def field_summary(self, axis, field):
-        return field_summary(axis, field)
+        return field_summary(self._table, axis, field)
 
     def open_url(self, url):
         # The right-click "Search Google" menu builds this URL itself (see
@@ -318,7 +303,7 @@ class Api:
         webbrowser.open(url)
 
     def export_table(self, spec):
-        default_name = os.path.splitext(os.path.basename(FILENAME))[0] + "_export.biom"
+        default_name = os.path.splitext(os.path.basename(self._filename))[0] + "_export.biom"
         result = self.window.create_file_dialog(
             webview.FileDialog.SAVE,
             save_filename=default_name,
@@ -328,7 +313,7 @@ class Api:
             return {"ok": False}
         path = result[0] if isinstance(result, (list, tuple)) else result
         try:
-            table = build_export_table(spec)
+            table = build_export_table(self._table, spec)
             write_biom_file(table, path)
         except Exception as exc:  # noqa: BLE001 -- surface to the UI instead of silently dropping
             return {"ok": False, "error": str(exc)}
@@ -2201,23 +2186,80 @@ def _set_dock_icon():
         pass
 
 
+def open_window(path):
+    table = biom.load_table(path)
+    title = f"BIOM Viewer — {os.path.basename(path)}"
+    api = Api(table, path)
+    window = webview.create_window(title, html=PAGE, js_api=api, width=1280, height=820, min_size=(600, 400))
+    api.window = window
+    return window
+
+
+# One shared IPC socket per user so double-clicking another .biom file opens
+# a new window in the already-running app instead of a whole new process
+# (and a second Dock icon) -- macOS delivers each double-click as a fresh
+# process launch (see build_macos_app.sh's launcher comment), so the second
+# process has to detect the first and hand its file off instead of running.
+def _ipc_path():
+    return f"/tmp/biom-viewer-{os.getuid()}.sock"
+
+
+def _send_to_running_instance(path):
+    sock_path = _ipc_path()
+    if not os.path.exists(sock_path):
+        return False
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+            s.settimeout(2)
+            s.connect(sock_path)
+            s.sendall(path.encode("utf-8"))
+        return True
+    except OSError:
+        return False  # stale socket file (instance crashed) -- fall through and become the instance
+
+
+def _listen_for_files():
+    sock_path = _ipc_path()
+    if os.path.exists(sock_path):
+        os.remove(sock_path)
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    server.bind(sock_path)
+    server.listen(5)
+    try:
+        while True:
+            conn, _ = server.accept()
+            with conn:
+                data = conn.recv(65536)
+            # create_window() from a background thread inserts the window
+            # into the already-running GUI loop immediately; called from the
+            # main thread it would just queue until that loop starts. See
+            # https://pywebview.flowrl.com's create_window() source.
+            if data:
+                open_window(data.decode("utf-8"))
+    finally:
+        server.close()
+        if os.path.exists(sock_path):
+            os.remove(sock_path)
+
+
 def main():
-    global TABLE, FILENAME
     if len(sys.argv) < 2:
         print("Usage: biom-viewer <file.biom>", file=sys.stderr)
         sys.exit(1)
     path = sys.argv[1]
-    TABLE = biom.load_table(path)
-    FILENAME = path
 
-    title = f"BIOM Viewer — {os.path.basename(path)}"
-    api = Api()
-    window = webview.create_window(title, html=PAGE, js_api=api, width=1280, height=820, min_size=(600, 400))
-    api.window = window
+    if _send_to_running_instance(path):
+        return  # handed off to the already-running instance -- nothing left to do
+
+    open_window(path)
     _set_dock_icon()
+    threading.Thread(target=_listen_for_files, daemon=True).start()
 
     def js(code):
-        return lambda: window.evaluate_js(code)
+        # Not the window that happened to create this menu -- the one
+        # currently focused, so File/Edit/View act on whichever window the
+        # user is actually looking at (there can be several now).
+        return lambda: (webview.active_window() or webview.windows[0]).evaluate_js(code)
 
     # Replaces pywebview's default Edit/View menus (Cut/Copy/Paste/Fullscreen)
     # with the app's own actions -- native menu items can't carry a Cocoa key
