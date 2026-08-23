@@ -185,6 +185,10 @@ def field_summary(axis, field):
         "distinct": len(ranked),
         "top": top,
         "other_count": other_count,
+        # Full ranked list, for the "+N other" viewer -- already computed
+        # above (ranked), so this is free beyond JSON size. Bounded by the
+        # axis length, same as `top`/`other_count` already are.
+        "all": [{"value": v, "count": c} for v, c in ranked],
     }
 
 
@@ -388,10 +392,12 @@ PAGE = """<!doctype html>
   .sr-more[data-tab]{cursor:pointer;text-decoration:underline}
   .sr-more[data-tab]:hover{color:var(--fg)}
   .sr-empty{padding:8px 10px;font-size:12.5px;color:var(--dim)}
-  #selected{width:100%;box-sizing:border-box;margin:6px 0;padding:5px 8px;background:transparent;color:var(--dim);
+  #selectedWrap{display:flex;align-items:center;gap:4px;margin:6px 0}
+  #selected{flex:1;min-width:0;box-sizing:border-box;padding:5px 8px;background:transparent;color:var(--dim);
              border:1px solid transparent;border-radius:4px;font-family:ui-monospace,monospace;outline:none;
              caret-color:transparent;transition:color .15s}
   #selected.flash{color:var(--fg)}
+  #expandBtn{flex:none}
   button.nav,button.tool{background:var(--panel-bg);color:var(--fg);border:1px solid var(--input-border);border-radius:4px;padding:4px 10px;cursor:pointer;
              font-size:14px;line-height:1}
   button.nav:disabled{opacity:.35;cursor:default}
@@ -478,18 +484,22 @@ PAGE = """<!doctype html>
              background:var(--hl);border-radius:6px;padding:4px 8px;font-size:12px}
   #rpList .rp-item button{background:none;border:none;color:var(--dim);cursor:pointer;font-size:12px}
   #rpList .rp-item button:hover{color:var(--fg)}
-  #codeOverlay{position:fixed;inset:0;background:rgba(0,0,0,.45);display:none;
+  .wm-overlay{position:fixed;inset:0;background:rgba(0,0,0,.45);display:none;
                align-items:center;justify-content:center;z-index:10}
-  #codeOverlay.open{display:flex}
-  #codeModal{background:var(--panel-bg);border:1px solid var(--border);border-radius:8px;
+  .wm-overlay.open{display:flex}
+  .wm-modal{background:var(--panel-bg);border:1px solid var(--border);border-radius:8px;
              width:640px;max-width:92vw;box-shadow:0 12px 40px rgba(0,0,0,.35)}
-  #codeModal header{display:flex;align-items:center;justify-content:flex-end;gap:8px;
+  .wm-modal header{display:flex;align-items:center;justify-content:flex-end;gap:8px;
                      padding:12px 14px;border-bottom:1px solid var(--border)}
-  #codeModal header h3{margin:0;font-size:14px;margin-right:auto}
-  #codeModal .x{cursor:pointer;color:var(--dim);font-size:16px;line-height:1;background:none;border:none}
-  #codeModal .x:hover{color:var(--fg)}
-  #codeBlock{margin:0;padding:14px;font-family:ui-monospace,monospace;font-size:12px;
+  .wm-modal header h3{margin:0;font-size:14px;margin-right:auto}
+  .wm-modal .x{cursor:pointer;color:var(--dim);font-size:16px;line-height:1;background:none;border:none}
+  .wm-modal .x:hover{color:var(--fg)}
+  .wm-body{margin:0;padding:14px;font-family:ui-monospace,monospace;font-size:12px;
              white-space:pre;overflow:auto;max-height:60vh}
+  .wm-body.wm-list{white-space:normal;display:flex;flex-direction:column;gap:2px}
+  .wm-list .wm-row{display:flex;justify-content:space-between;gap:10px;padding:2px 4px;border-radius:3px}
+  .wm-list .wm-row:hover{background:var(--hl)}
+  .wm-list .wm-row .wm-count{color:var(--dim);flex:none}
   .stat-cell,.rh-stats{background:var(--panel-bg);color:var(--dim);font-size:calc(var(--fs)*0.9);line-height:1.35;
              padding:4px 6px;display:flex;flex-direction:column;gap:3px;overflow:hidden;cursor:pointer;min-height:0}
   .rh-stats{white-space:normal}
@@ -504,6 +514,8 @@ PAGE = """<!doctype html>
   .rh-stats.hl-row .rh-label{box-shadow:inset 0 2px 0 var(--sel-outline),inset 2px 0 0 var(--sel-outline),inset -2px 0 0 var(--sel-outline)}
   .stat-line{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .stat-line b{color:var(--fg);font-weight:600}
+  .stat-other{cursor:pointer;text-decoration:underline}
+  .stat-other:hover{color:var(--fg)}
   .stat-bars{display:flex;align-items:flex-end;gap:1px;height:calc(var(--fs)*1.8);margin:1px 0}
   .stat-bars .bar{flex:1;background:var(--accent);border-radius:1px;min-height:2px}
   .stat-top-row{position:relative;padding:1px 3px;border-radius:2px;overflow:hidden;display:flex;
@@ -531,7 +543,10 @@ PAGE = """<!doctype html>
   </span>
 </div>
 <div id="axisChips"></div>
-<input id="selected" readonly value="Click a row, column, or cell to see its full text here (auto-copied to clipboard). Double-click a header to toggle summary stats.">
+<div id="selectedWrap">
+  <input id="selected" readonly value="Click a row, column, or cell to see its full text here (auto-copied to clipboard). Double-click a header to toggle summary stats.">
+  <button class="tool" id="expandBtn" title="View full content in a window (⌘⏎)">⤢</button>
+</div>
 
 <div id="body">
   <div id="rowNav">
@@ -567,14 +582,34 @@ PAGE = """<!doctype html>
     <div id="rpList"></div>
   </div>
 </div>
-<div id="codeOverlay">
-  <div id="codeModal">
+<div id="codeOverlay" class="wm-overlay">
+  <div class="wm-modal">
     <header>
       <h3>Export as Python</h3>
       <button class="tool" id="codeCopy">Copy</button>
       <button class="x" id="codeClose">✕</button>
     </header>
-    <pre id="codeBlock"></pre>
+    <pre id="codeBlock" class="wm-body"></pre>
+  </div>
+</div>
+<div id="cellOverlay" class="wm-overlay">
+  <div class="wm-modal">
+    <header>
+      <h3 id="cellTitle">Cell content</h3>
+      <button class="tool" id="cellCopy">Copy</button>
+      <button class="x" id="cellClose">✕</button>
+    </header>
+    <pre id="cellBlock" class="wm-body"></pre>
+  </div>
+</div>
+<div id="valuesOverlay" class="wm-overlay">
+  <div class="wm-modal">
+    <header>
+      <h3 id="valuesTitle">All values</h3>
+      <button class="tool" id="valuesCopy">Copy</button>
+      <button class="x" id="valuesClose">✕</button>
+    </header>
+    <div id="valuesBody" class="wm-body wm-list"></div>
   </div>
 </div>
 <script>
@@ -1245,7 +1280,7 @@ async function render(){
   if(stripOnCols()){
     grid.appendChild(fillerCell());
     colStats.forEach((s, i) => {
-      const cell = statCell(s);
+      const cell = statCell(s, colLabel(c0 + i));
       cell.dataset.c = c0 + i; // so applyHighlight() treats it as part of its column
       grid.appendChild(cell);
     });
@@ -1257,6 +1292,7 @@ async function render(){
     if(stripOnRows()){
       rh.classList.add('rh-stats');
       rh.innerHTML = `<div class="stat-line rh-label">${escapeHtml(label)}</div>` + statCellHtml(rowStats[r-r0]);
+      wireStatOther(rh, rowStats[r-r0], label);
     } else if(mode==='col'){
       rh.innerHTML = `<span class="hdr-label">${escapeHtml(label)}</span>${axisControlsHtml('sample', colFields[r])}`;
     } else {
@@ -1282,7 +1318,7 @@ async function render(){
         cell.title = `${rowLabel(r)}\n${colLabel(c)} = ${v}`;
         cell.addEventListener('click', ()=>{
           selR=r; selC=c;
-          showSelected(`${rowLabel(r)}  |  ${colLabel(c)}  =  ${v}`);
+          showSelected(`${rowLabel(r)}  |  ${colLabel(c)}  =  ${v}`, v);
           applyHighlight();
         });
       } else {
@@ -1293,7 +1329,7 @@ async function render(){
         cell.title = `${rowLabel(r)}\n${colLabel(c)} = ${text}`;
         cell.addEventListener('click', ()=>{
           selR=r; selC=c;
-          showSelected(`${rowLabel(r)}  |  ${colLabel(c)}  =  ${text}`);
+          showSelected(`${rowLabel(r)}  |  ${colLabel(c)}  =  ${text}`, raw);
           applyHighlight();
         });
       }
@@ -1314,7 +1350,13 @@ function copySelected(){
   if(!ok && navigator.clipboard) navigator.clipboard.writeText(inp.value).catch(()=>{});
 }
 
-function showSelected(text){
+// `raw` is the underlying cell/field value alone (no "row | col =" framing) --
+// what the expand button (⤢, ⌘⏎) shows full-size and pretty-printed if it's
+// JSON. Falls back to `text` for calls (header clicks, status messages) that
+// have no separate raw value.
+let lastSelectedValue = '';
+function showSelected(text, raw){
+  lastSelectedValue = raw!==undefined ? raw : text;
   const inp=document.getElementById('selected');
   inp.value = text;
   copySelected();
@@ -1322,6 +1364,43 @@ function showSelected(text){
   clearTimeout(showSelected._t);
   showSelected._t = setTimeout(()=>inp.classList.remove('flash'), 700);
 }
+
+function prettyPrintValue(v){
+  if(v && typeof v === 'object') return JSON.stringify(v, null, 2);
+  const s = String(v);
+  try{ return JSON.stringify(JSON.parse(s), null, 2); }
+  catch(e){ return s; }
+}
+
+function openCellModal(){
+  document.getElementById('cellBlock').textContent = prettyPrintValue(lastSelectedValue);
+  document.getElementById('cellOverlay').classList.add('open');
+}
+document.getElementById('expandBtn').onclick = openCellModal;
+document.getElementById('cellCopy').onclick = ()=>{
+  navigator.clipboard.writeText(document.getElementById('cellBlock').textContent);
+};
+document.getElementById('cellClose').onclick = ()=>document.getElementById('cellOverlay').classList.remove('open');
+document.getElementById('cellOverlay').addEventListener('click', (e)=>{
+  if(e.target.id === 'cellOverlay') e.currentTarget.classList.remove('open');
+});
+
+let lastValuesText = '';
+function openValuesModal(s, label){
+  document.getElementById('valuesTitle').textContent = `${label} — all ${s.distinct} values`;
+  document.getElementById('valuesBody').innerHTML = s.all
+    .map(v=>`<div class="wm-row"><span>${escapeHtml(v.value)}</span><span class="wm-count">${v.count}</span></div>`)
+    .join('');
+  lastValuesText = s.all.map(v=>`${v.value}\t${v.count}`).join('\\n');
+  document.getElementById('valuesOverlay').classList.add('open');
+}
+document.getElementById('valuesCopy').onclick = ()=>{
+  navigator.clipboard.writeText(lastValuesText);
+};
+document.getElementById('valuesClose').onclick = ()=>document.getElementById('valuesOverlay').classList.remove('open');
+document.getElementById('valuesOverlay').addEventListener('click', (e)=>{
+  if(e.target.id === 'valuesOverlay') e.currentTarget.classList.remove('open');
+});
 
 function fmtNum(v){ return Number.isInteger(v) ? String(v) : v.toFixed(2); }
 
@@ -1796,16 +1875,29 @@ function statCellHtml(s){
 
   const distinctPct = s.n ? Math.round(s.distinct/s.n*100) : 0;
   const presentTotal = s.n - s.missing;
-  const other = s.other_count ? `<div class="stat-line">+${s.other_count} other</div>` : '';
+  const other = s.other_count
+    ? `<div class="stat-line stat-other" title="View all ${s.distinct} values">+${s.other_count} other</div>`
+    : '';
   return `<div class="stat-line">${presence}</div>` +
     `<div class="stat-line">Distinct <b>${s.distinct}</b> (${distinctPct}%)</div>` +
     topValueRows(s.top, presentTotal) + other;
 }
 
-function statCell(s){
+// Wires the "+N other" line's click after innerHTML is set (statCellHtml
+// only builds markup, no field/axis context to close over) -- shared by the
+// col-stats strip (via statCell) and the row-stats strip (baked into a
+// bigger innerHTML alongside the row label, so wired separately there).
+function wireStatOther(containerEl, s, label){
+  if(!s.all) return;
+  const el = containerEl.querySelector('.stat-other');
+  if(el) el.onclick = (e)=>{ e.stopPropagation(); openValuesModal(s, label); };
+}
+
+function statCell(s, label){
   const cell = document.createElement('div');
   cell.className = 'cell stat-cell';
   cell.innerHTML = statCellHtml(s);
+  wireStatOther(cell, s, label);
   return cell;
 }
 
@@ -1963,6 +2055,7 @@ document.addEventListener('keydown', (e)=>{
     else if(k==='s'){ e.preventDefault(); exportBiomFile(); }
     else if(k==='z' && e.shiftKey){ e.preventDefault(); redo(); }
     else if(k==='z'){ e.preventDefault(); undo(); }
+    else if(k==='enter'){ e.preventDefault(); openCellModal(); }
     else if(e.key==='=' || e.key==='+'){ e.preventDefault(); setFontSize(fontSize+1); }
     else if(e.key==='-'){ e.preventDefault(); setFontSize(fontSize-1); }
     return;
@@ -1970,7 +2063,7 @@ document.addEventListener('keydown', (e)=>{
   if(e.key==='Escape'){
     let handled = false;
     if(closeFilterPopover()) handled = true;
-    ['codeOverlay','replaceOverlay'].forEach(id=>{
+    ['codeOverlay','replaceOverlay','cellOverlay','valuesOverlay'].forEach(id=>{
       const el = document.getElementById(id);
       if(el.classList.contains('open')){ el.classList.remove('open'); handled = true; }
     });
@@ -2048,6 +2141,8 @@ def main():
             MenuSeparator(),
             MenuAction("Increase Font Size", js("setFontSize(fontSize+1)")),
             MenuAction("Decrease Font Size", js("setFontSize(fontSize-1)")),
+            MenuSeparator(),
+            MenuAction("Expand Selected Cell…", js("openCellModal()")),
         ]),
     ]
     webview.start(menu=menu)
