@@ -513,21 +513,29 @@ PAGE = """<!doctype html>
   .rh-stats{white-space:normal}
   .rh-stats:hover{background:var(--panel-bg)}
   .rh-stats .rh-label{font-size:var(--fs);font-weight:700;color:var(--hdr-fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
-             background:var(--hdr-bg);margin:-4px -6px 4px;padding:4px 6px;cursor:pointer}
+             background:var(--hdr-bg);margin:-4px -6px 4px;padding:4px 6px;cursor:pointer;flex-shrink:0}
   .rh-stats .rh-label:hover{background:var(--input-border)}
   /* The label bar's own opaque background paints over the parent cell's
      top/left/right edges (its negative margins stretch it to the cell
      border), hiding the selection border there -- redraw those edges on
      the label itself so the border reads as continuous when selected. */
   .rh-stats.hl-row .rh-label{box-shadow:inset 0 2px 0 var(--sel-outline),inset 2px 0 0 var(--sel-outline),inset -2px 0 0 var(--sel-outline)}
-  .stat-line{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  /* flex-shrink:0: without it, if the stat block's fixed-height grid track
+     (see statRowH()) is even a hair short of the flex column's natural
+     content height, every line shrinks below its own line-height to fit --
+     and since each line also clips its own overflow, that shaves the
+     bottom few px off EVERY line (descenders like g/y sliced flat), not
+     just whatever's at the container's bottom edge. Forcing full natural
+     height per line means a measurement shortfall clips at most the last
+     line instead of shaving every line a little. */
+  .stat-line{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex-shrink:0}
   .stat-line b{color:var(--fg);font-weight:600}
   .stat-other{cursor:pointer;text-decoration:underline}
   .stat-other:hover{color:var(--fg)}
-  .stat-bars{display:flex;align-items:flex-end;gap:1px;height:calc(var(--fs)*1.8);margin:1px 0}
+  .stat-bars{display:flex;align-items:flex-end;gap:1px;height:calc(var(--fs)*1.8);margin:1px 0;flex-shrink:0}
   .stat-bars .bar{flex:1;background:var(--accent);border-radius:1px;min-height:2px}
   .stat-top-row{position:relative;padding:1px 3px;border-radius:2px;overflow:hidden;display:flex;
-                align-items:center;justify-content:space-between;gap:4px}
+                align-items:center;justify-content:space-between;gap:4px;flex-shrink:0}
   .stat-top-row .fill{position:absolute;inset:0;background:var(--nz-bg);z-index:0}
   .stat-top-row .lbl,.stat-top-row .pct{position:relative;z-index:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .stat-top-row .pct{flex-shrink:0;font-family:ui-monospace,monospace}
@@ -689,7 +697,7 @@ function statRowH(){
   probe.className = 'cell stat-cell' + (anyFieldRowExpanded() ? ' rh-stats' : '');
   probe.style.cssText = 'position:absolute;visibility:hidden;left:-9999px;top:-9999px;'
     + `width:${anyFieldRowExpanded() ? RHW_MAX : COLW_TARGET}px;`;
-  probe.innerHTML = (stripOnRows() ? '<div class="stat-line rh-label">X</div>' : '') + statCellHtml(worstCase);
+  probe.innerHTML = (anyFieldRowExpanded() ? '<div class="stat-line rh-label">X</div>' : '') + statCellHtml(worstCase);
   document.body.appendChild(probe);
   const val = Math.ceil(probe.getBoundingClientRect().height);
   probe.remove();
