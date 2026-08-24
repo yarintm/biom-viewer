@@ -250,3 +250,40 @@ def test_build_export_table_normalizes_inconsistent_metadata_keys(tmp_path):
     app.write_biom_file(table, out_path)  # must not raise
     reloaded = biom.load_table(out_path)
     assert reloaded.shape == (3, 2)
+
+
+def test_build_export_table_normalizes_mixed_type_metadata_values(tmp_path):
+    # A second way real files break to_hdf5()'s homogeneity requirement: a
+    # single key whose *values* disagree in type across ids, not just which
+    # keys are present. Seen in the wild as a list-of-int taxid lineage (vs.
+    # to_hdf5's list-of-str assumption), a list field that's bare None for
+    # some ids instead of an empty list, an int field that's None for some
+    # ids, and a dict-valued field (no native hdf5 mapping type). Any one of
+    # these used to crash to_hdf5() (AttributeError or "Object dtype ...
+    # has no native HDF5 equivalent") after write_biom_file had already
+    # created the destination file, deleting it on the way out -- so a
+    # regression here reads as "export silently does nothing."
+    data = np.zeros((3, 2))
+    obs_md = [
+        {"lineage": [1, 131567, 2], "ranks": {"domain": 2}, "run_ver": 1},
+        {"lineage": None, "ranks": {"domain": 2}, "run_ver": None},
+        {"lineage": [1], "ranks": {"domain": 2}, "run_ver": 1},
+    ]
+    table = biom.Table(data, ["o1", "o2", "o3"], ["s1", "s2"], observation_metadata=obs_md)
+    spec = {
+        "observation": {"ids": None, "replacements": [], "renames": {}, "deletedFields": []},
+        "sample": {"ids": None, "replacements": [], "renames": {}, "deletedFields": []},
+    }
+    table = app.build_export_table(table, spec)
+
+    out_path = str(tmp_path / "export.biom")
+    app.write_biom_file(table, out_path)  # must not raise
+    reloaded = biom.load_table(out_path)
+    assert reloaded.shape == (3, 2)
+    md = dict(zip(reloaded.ids(axis="observation"), reloaded.metadata(axis="observation")))
+    # biom round-trips vlen strings as bytes; decode to compare content.
+    lineage = [x.decode() if isinstance(x, bytes) else x for x in md["o1"]["lineage"]]
+    assert lineage == ["1", "131567", "2"]
+    # None normalized to an empty list, not dropped or left heterogeneous;
+    # biom pads short list entries to the column's max width with b''.
+    assert all(x in (b"", "") for x in md["o2"]["lineage"])

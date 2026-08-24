@@ -193,21 +193,47 @@ def build_export_table(table, spec):
         # files routinely have per-id metadata dicts that disagree (an
         # optional field present on some ids, absent on others), which
         # to_hdf5() rejects outright rather than writing a partial file.
-        # Since the write is not transactional, hitting that error mid-write
-        # used to leave a truncated, unopenable .biom at the destination.
-        # Filling every id in to the union of keys (missing = None) makes
-        # the categories consistent without changing any existing value.
+        # It also requires each key's column to be internally homogeneous:
+        # every value a str, or every value a list (of str) -- bare None is
+        # the only mix it tolerates. Real files break this in both
+        # directions (a list-valued lineage field sitting next to bare None
+        # for ids missing it; a list of ints instead of strs; an int field
+        # with some ids None). Since the write is not transactional, hitting
+        # any of this mid-write used to leave a truncated, unopenable .biom
+        # at the destination.
+        #
+        # Fix by normalizing per *column* rather than per entry, and only
+        # where the column actually needs it -- a clean uniform-numeric
+        # column (no None) already round-trips fine as numbers via to_hdf5's
+        # own dtype inference, and stringifying it unnecessarily would lose
+        # that. Only list-valued columns (always, since elements might not
+        # be str) and columns that mix None with a non-str type (which
+        # to_hdf5 can't reconcile into one dtype) get coerced.
         entries = table.metadata(axis=axis)
         if entries:
+            ids = table.ids(axis=axis)
             all_keys = set()
             for e in entries:
                 if e:
                     all_keys.update(e.keys())
-            filled = {}
-            for id_, e in zip(table.ids(axis=axis), entries):
-                entry = {k: None for k in all_keys}
-                entry.update(e or {})
-                filled[id_] = entry
+            columns = {}
+            for k in all_keys:
+                values = [(e or {}).get(k) for e in entries]
+                non_none_types = {type(v) for v in values if v is not None}
+                has_none = any(v is None for v in values)
+                if non_none_types <= {list, tuple}:
+                    columns[k] = [
+                        [] if v is None else ["" if x is None else str(x) for x in v]
+                        for v in values
+                    ]
+                elif non_none_types <= {str} or (
+                    len(non_none_types) <= 1 and not has_none
+                    and next(iter(non_none_types), str) in (str, int, float, bool)
+                ):
+                    columns[k] = values
+                else:
+                    columns[k] = [None if v is None else str(v) for v in values]
+            filled = {id_: {k: columns[k][i] for k in all_keys} for i, id_ in enumerate(ids)}
             table.add_metadata(filled, axis=axis)
 
     return table
