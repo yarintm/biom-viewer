@@ -104,8 +104,10 @@ def _is_missing(v):
     return False
 
 
-def field_summary(table, axis, field):
+def field_summary(table, axis, field, idxs=None):
     entries = table.metadata(axis=axis)
+    if idxs is not None:
+        entries = [entries[i] for i in idxs]
     total = len(entries)
     raw = [(dict(e) if e else {}).get(field) for e in entries]
     present = [v for v in raw if not _is_missing(v)]
@@ -289,8 +291,8 @@ class Api:
     def col_summary(self, c):
         return _axis_summary(self._csc()[:, c], self._table.shape[0])
 
-    def field_summary(self, axis, field):
-        return field_summary(self._table, axis, field)
+    def field_summary(self, axis, field, idxs=None):
+        return field_summary(self._table, axis, field, idxs)
 
     def open_url(self, url):
         # The right-click "Search Google" menu builds this URL itself (see
@@ -362,14 +364,17 @@ PAGE = """<!doctype html>
   #modeGroup button.active{background:var(--accent);color:var(--bg);font-weight:700}
   #modeGroup button[data-m="row"].active{background:var(--row-meta);color:var(--row-meta-fg)}
   #modeGroup button[data-m="col"].active{background:var(--col-meta);color:var(--col-meta-fg)}
-  #searchWrap{position:relative}
+  #searchWrap{position:relative;display:flex;align-items:center;gap:4px}
   #searchBox{width:220px;box-sizing:border-box;background:var(--input-bg);color:var(--fg);
              border:1px solid var(--input-border);border-radius:4px;padding:5px 8px;font-size:12.5px;outline:none}
   #searchBox:focus{border-color:var(--sel-outline)}
+  #searchPin{padding:4px 7px;font-size:12px;opacity:.45}
+  #searchPin.on{opacity:1;border-color:var(--accent);background:var(--hl)}
   #searchResults{position:absolute;top:calc(100% + 4px);right:0;width:420px;max-height:60vh;overflow-y:auto;
              background:var(--panel-bg);border:1px solid var(--border);border-radius:6px;
              box-shadow:0 12px 30px rgba(0,0,0,.35);display:none;z-index:20}
   #searchResults.open{display:block}
+  #searchResults.pinned{outline:2px solid var(--accent);outline-offset:2px}
   .stabs{position:sticky;top:0;z-index:1;display:flex;gap:2px;padding:5px 6px;overflow-x:auto;
              background:var(--panel-bg);border-bottom:1px solid var(--border)}
   .stabs::-webkit-scrollbar{display:none}
@@ -547,14 +552,15 @@ PAGE = """<!doctype html>
     <span id="modeTag"></span>
   </span>
   <span id="toolbar">
-    <span id="searchWrap">
-      <input id="searchBox" type="text" placeholder="Search…" autocomplete="off">
-      <div id="searchResults"></div>
-    </span>
     <span id="modeGroup">
       <button class="active" data-m="data">Data</button>
       <button data-m="row">Row metadata</button>
       <button data-m="col">Col metadata</button>
+    </span>
+    <span id="searchWrap">
+      <input id="searchBox" type="text" placeholder="Search…" autocomplete="off">
+      <button class="tool" id="searchPin" title="Keep search results open">📌</button>
+      <div id="searchResults"></div>
     </span>
   </span>
 </div>
@@ -1188,7 +1194,7 @@ function selectSearchResult(i){
   const e = searchFlat[i];
   if(!e) return;
   jumpTo(e);
-  document.getElementById('searchResults').classList.remove('open');
+  if(!searchPinned) document.getElementById('searchResults').classList.remove('open');
 }
 
 async function jumpTo(entry){
@@ -1290,10 +1296,10 @@ async function render(){
     ? await Promise.all(Array.from({length: renderedCols}, (_, k) => colStatsFetch(c0+k)))
     : null;
   const rowStats = stripOnRows()
-    ? await Promise.all(Array.from({length: renderedRows}, (_, k) => window.pywebview.api.field_summary('sample', colFields[r0+k])))
+    ? await Promise.all(Array.from({length: renderedRows}, (_, k) => window.pywebview.api.field_summary('sample', colFields[r0+k], visSample)))
     : null;
   const fieldExpandedStat = fieldExpandedIdx!=null
-    ? await window.pywebview.api.field_summary('sample', colFields[fieldExpandedIdx])
+    ? await window.pywebview.api.field_summary('sample', colFields[fieldExpandedIdx], visSample)
     : null;
 
   const grid = document.getElementById('grid');
@@ -1466,7 +1472,7 @@ function fmtNum(v){ return Number.isInteger(v) ? String(v) : v.toFixed(2); }
 // from data mode. Matches colLabel's own mode branch.
 function colStatsFetch(j){
   return mode==='row'
-    ? window.pywebview.api.field_summary('observation', rowFields[j])
+    ? window.pywebview.api.field_summary('observation', rowFields[j], visObs)
     : window.pywebview.api.col_summary(sampleAt(j));
 }
 
@@ -2097,6 +2103,23 @@ modeBtns.forEach(b=>b.onclick = ()=>{
 
 const searchBox = document.getElementById('searchBox');
 let searchDebounce=null;
+// Selecting a result blurs the box and closes the panel (jumpTo) without
+// clearing the query -- re-focusing (a plain click, no typing) should bring
+// the same results back rather than leaving the panel dead until the next
+// keystroke.
+searchBox.addEventListener('focus', ()=>{ if(searchBox.value.trim()) runSearch(searchBox.value); });
+
+// Pinning keeps the results panel open across result clicks and clicks
+// elsewhere in the grid, so you can work through a list of matches (e.g.
+// jump to several samples in turn) without re-searching each time.
+let searchPinned = false;
+const searchPin = document.getElementById('searchPin');
+searchPin.onclick = ()=>{
+  searchPinned = !searchPinned;
+  searchPin.classList.toggle('on', searchPinned);
+  document.getElementById('searchResults').classList.toggle('pinned', searchPinned);
+  if(searchPinned && searchBox.value.trim()) runSearch(searchBox.value);
+};
 searchBox.addEventListener('input', ()=>{
   clearTimeout(searchDebounce);
   searchDebounce = setTimeout(()=>runSearch(searchBox.value), 120);
@@ -2114,9 +2137,18 @@ searchBox.addEventListener('keydown', (e)=>{
   else if(e.key==='ArrowDown'){ e.preventDefault(); highlightResult(Math.min(searchHiIdx+1, searchFlat.length-1)); }
   else if(e.key==='ArrowUp'){ e.preventDefault(); highlightResult(Math.max(searchHiIdx-1, 0)); }
   else if(e.key==='Enter'){ e.preventDefault(); selectSearchResult(searchHiIdx>=0 ? searchHiIdx : 0); }
-  else if(e.key==='Escape'){ results.classList.remove('open'); searchBox.blur(); }
+  else if(e.key==='Escape'){
+    // Escape always dismisses, even pinned -- it's the explicit "get this
+    // out of my way" gesture, so it also drops the pin rather than leaving
+    // a pinned-but-hidden panel that won't reopen on the next focus.
+    searchPinned = false;
+    searchPin.classList.remove('on');
+    results.classList.remove('open', 'pinned');
+    searchBox.blur();
+  }
 });
 document.addEventListener('click', (e)=>{
+  if(searchPinned) return;
   // composedPath(), not searchWrap.contains(e.target): a click on something
   // like .sr-more ("show all") re-renders #searchResults.innerHTML first
   // (its own listener runs before this one, earlier in the bubble path),
