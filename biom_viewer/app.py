@@ -9,6 +9,7 @@ import webbrowser
 from collections import Counter
 
 import biom
+import numpy as np
 import webview
 from webview.menu import Menu, MenuAction, MenuSeparator
 
@@ -21,8 +22,17 @@ def _json_safe(v):
         return None
     if isinstance(v, dict):
         return {k: _json_safe(x) for k, x in v.items()}
+    # biom-format reads list-valued metadata (e.g. a taxonomy lineage) back
+    # as a numpy object array of bytes, not a plain list of str -- neither
+    # of which json.dumps can serialize on its own.
+    if isinstance(v, np.ndarray):
+        return [_json_safe(x) for x in v.tolist()]
     if isinstance(v, (list, tuple)):
         return [_json_safe(x) for x in v]
+    if isinstance(v, bytes):
+        return v.decode("utf-8", "replace")
+    if isinstance(v, np.generic):
+        return _json_safe(v.item())
     return v
 
 

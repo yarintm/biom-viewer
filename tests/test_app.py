@@ -1,3 +1,5 @@
+import json
+
 import numpy as np
 import biom
 
@@ -287,3 +289,8 @@ def test_build_export_table_normalizes_mixed_type_metadata_values(tmp_path):
     # None normalized to an empty list, not dropped or left heterogeneous;
     # biom pads short list entries to the column's max width with b''.
     assert all(x in (b"", "") for x in md["o2"]["lineage"])
+
+    # A custom (non-"taxonomy") list-metadata key comes back from biom's own
+    # HDF5 reader as a numpy object array of bytes, not a plain list of str
+    # -- meta() must still be able to JSON-serialize it for the frontend.
+    json.dumps(api(reloaded).meta())
