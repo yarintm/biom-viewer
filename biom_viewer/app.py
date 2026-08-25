@@ -459,6 +459,13 @@ PAGE = """<!doctype html>
              padding:0 2px;line-height:1}
   .axis-ctl button:hover{color:var(--fg)}
   .axis-ctl button.on{color:var(--accent);font-weight:700}
+  /* 📌 is a full-color emoji glyph -- CSS `color` doesn't tint it like the
+     text-glyph axis-ctl buttons (⇅⏷✎), so on/off uses opacity + a chip
+     background instead, matching #searchPin's identical constraint. */
+  .pin-btn{opacity:.35}
+  .pin-btn:hover{opacity:.75}
+  .pin-btn.on{opacity:1;background:var(--hl);border-radius:3px}
+  .pin-last{border-bottom:2px solid var(--accent)}
   #filterPopover{position:fixed;z-index:30;background:var(--panel-bg);border:1px solid var(--border);
              border-radius:6px;box-shadow:0 8px 24px rgba(0,0,0,.3);padding:6px;display:flex;gap:4px;align-items:center}
   #filterPopover input{width:70px;box-sizing:border-box;background:var(--input-bg);color:var(--fg);
@@ -678,6 +685,12 @@ window.onerror = (msg, url, line, col) => {
 let meta=null, rowPage=0, colPage=0, selR=null, selC=null, fontSize=11;
 let autoRows=20, autoCols=8, rowHPx=22, colWPx=130;
 let availH=0, availW=0;
+// Pinned rows (raw observation indices) and their own selection slot --
+// deliberately outside axisState/undo history: pin/unpin is high-frequency
+// and low-stakes compared to sort/filter/rename/delete, so it shouldn't
+// flood the 50-entry undo stack or be ctrl-Z-able.
+let pinnedObs = new Set();
+let selPinnedRaw = null;
 let summaryVisible=false;
 // In 'col' mode, double-clicking one row header expands just that field's
 // row to a stat summary (instead of summaryVisible's "expand every row").
@@ -769,11 +782,13 @@ function toggleSummary(centerRow){
   render();
 }
 
+// Derived from the font, never measured off a rendered cell: cell height is
+// set by the grid track computed from this, so measuring it back would feed
+// into itself and can collapse the page to 2 giant rows after a partial page.
+function shortRowHPx(){ return Math.round(fontSize*1.3) + 8; } // 3px padding + 1px border, top and bottom
+
 function computeFit(){
-  // Derived from the font, never measured off a rendered cell: cell height is
-  // set by the grid track we compute here, so measuring it feeds back and can
-  // collapse the page to 2 giant rows after a partial page.
-  const shortRowH = Math.round(fontSize*1.3) + 8; // 3px padding + 1px border, top and bottom
+  const shortRowH = shortRowHPx();
   const mainRect = document.getElementById('main').getBoundingClientRect();
   const colNavH = document.getElementById('colNav').getBoundingClientRect().height;
   availH = mainRect.height - colNavH - GAP - (stripOnCols() ? statRowH() : 0);
@@ -793,6 +808,14 @@ function computeFit(){
   } else {
     const totalRowsTarget = Math.max(2, Math.floor(availH/shortRowH)); // includes header row
     autoRows = totalRowsTarget - 1;
+    // Pinned rows get their own fixed track above the paged rows (see
+    // render()), at the same shortRowH each -- shrink the paged budget by
+    // that many so the frozen block + paged rows still fit availH together.
+    // Neither of the two branches above applies here: both are 'col'-mode
+    // only, and pinning is scoped to data/row mode.
+    if((mode==='data'||mode==='row') && pinnedObs.size>0){
+      autoRows = Math.max(1, autoRows - pinnedObs.size);
+    }
   }
 
   autoCols = Math.max(1, Math.floor(availW/COLW_TARGET));
@@ -874,6 +897,22 @@ function resolveAxisPosition(axis, rawIdx){
   recomputeVisible(axis);
   renderAxisChips();
   return rawIdx;
+}
+
+// jumpTo's observation-axis branches (search "jump to a taxon/row value")
+// route through here rather than calling resolveAxisPosition directly --
+// a pinned row is excluded from visObs on purpose (it's in the frozen
+// block, not the paginated flow), which resolveAxisPosition can't tell
+// apart from "filtered out" and would otherwise mis-resolve.
+function selectObservationRow(rawIdx){
+  if(pinnedObs.has(rawIdx)){
+    selR = null; selPinnedRaw = rawIdx;
+    return;
+  }
+  selPinnedRaw = null;
+  const pos = resolveAxisPosition('observation', rawIdx);
+  rowPage = Math.floor(pos / rowsPerPage());
+  selR = pos;
 }
 
 const modeBtns = [...document.querySelectorAll('#modeGroup button')];
@@ -962,6 +1001,16 @@ function metaCellAt(i, j){
   return entry ? applyReplacements('sample', field, entry[field]) : null;
 }
 
+// Pinned/frozen rows already have a raw observation index (they're excluded
+// from visObs, so there's no page position to run through obsAt()) --
+// metaCellAt(i,j)'s row-mode branch inlined against a raw index directly.
+// Only needed for 'row' mode; pinning never applies in 'col' mode.
+function metaCellAtRaw(rawIdx, j){
+  const entry = meta.row_metadata && meta.row_metadata[rawIdx];
+  const field = rowFields[j];
+  return entry ? applyReplacements('observation', field, entry[field]) : null;
+}
+
 // Missing-value tokens, mirrored from the backend's _MISSING_TOKENS
 // (field_summary) so a field the backend treats as numeric-with-some-NAs
 // doesn't get misclassified as categorical here just because "NA" isn't a JS number.
@@ -1034,7 +1083,12 @@ function recomputeVisible(axis){
   const state = axisState[axis];
   const entries = axis==='observation' ? meta.row_metadata : meta.col_metadata;
   const total = axis==='observation' ? meta.rows : meta.cols;
-  const active = state.filters.length>0 || state.sortDir!==0;
+  // Pinned rows live in their own frozen block (see render()), not the
+  // normal paged flow -- excluding them here, the same way a filter
+  // already excludes rows, means rowsTotal()/pageBounds()/obsAt() all
+  // keep working unmodified for everything downstream of visObs.
+  const pinnedActive = axis==='observation' && pinnedObs.size>0;
+  const active = state.filters.length>0 || state.sortDir!==0 || pinnedActive;
   let result = null;
   if(active){
     let idxs = [];
@@ -1045,6 +1099,7 @@ function recomputeVisible(axis){
         return filterMatches(f, entry ? entry[f.field] : null);
       });
     });
+    if(pinnedActive) idxs = idxs.filter(i=>!pinnedObs.has(i));
     if(state.sortDir!==0){
       const field = state.sortField;
       const numeric = fieldIsNumeric(axis, field);
@@ -1242,9 +1297,8 @@ async function jumpTo(entry){
     selR = null; selC = pos;
   } else if(entry.type==='taxon'){
     setMode('data');
-    const pos = resolveAxisPosition('observation', entry.i);
-    rowPage = Math.floor(pos / rowsPerPage());
-    selR = pos; selC = null;
+    selectObservationRow(entry.i);
+    selC = null;
   } else if(entry.type==='rowField'){
     setMode('row');
     colPage = Math.floor(entry.i / colsPerPage());
@@ -1255,10 +1309,9 @@ async function jumpTo(entry){
     selR = entry.i; selC = null;
   } else if(entry.type==='rowValue'){
     setMode('row');
-    const pos = resolveAxisPosition('observation', entry.i);
-    rowPage = Math.floor(pos / rowsPerPage());
+    selectObservationRow(entry.i);
     colPage = Math.floor(entry.fi / colsPerPage());
-    selR = pos; selC = entry.fi;
+    selC = entry.fi;
   } else if(entry.type==='colValue'){
     setMode('col');
     const pos = resolveAxisPosition('sample', entry.i);
@@ -1292,15 +1345,25 @@ async function render(){
   document.getElementById('colPrev').disabled = colPage===0;
   document.getElementById('colNext').disabled = c1>=colsTotal();
 
-  let data = null;
+  // Pinned rows are scoped to data/row mode and already excluded from
+  // visObs (see recomputeVisible) -- sorted by raw index for a stable,
+  // predictable frozen-block order that doesn't reshuffle on pin/unpin.
+  const pinnedRaw = (mode==='data'||mode==='row') ? [...pinnedObs].sort((a,b)=>a-b) : [];
+
+  let data = null, pinnedData = null;
   if(mode==='data'){
+    const colIdxs = []; for(let j=c0;j<c1;j++) colIdxs.push(sampleAt(j));
+    let bodyFetch;
     if(visObs || visSample){
       const rowIdxs = []; for(let i=r0;i<r1;i++) rowIdxs.push(obsAt(i));
-      const colIdxs = []; for(let j=c0;j<c1;j++) colIdxs.push(sampleAt(j));
-      data = await window.pywebview.api.data_window_idx(rowIdxs, colIdxs);
+      bodyFetch = window.pywebview.api.data_window_idx(rowIdxs, colIdxs);
     } else {
-      data = await window.pywebview.api.data_window(r0, r1, c0, c1);
+      bodyFetch = window.pywebview.api.data_window(r0, r1, c0, c1);
     }
+    const pinnedFetch = pinnedRaw.length
+      ? window.pywebview.api.data_window_idx(pinnedRaw, colIdxs)
+      : Promise.resolve([]);
+    [data, pinnedData] = await Promise.all([bodyFetch, pinnedFetch]);
   }
 
   // Stretch to fill availH x availW, but never past the auto-fit page size —
@@ -1312,12 +1375,12 @@ async function render(){
   if(stripOnRows()){
     // Column headers stay short; only the field rows below need the tall
     // track, so the header doesn't compete with them for height.
-    headerRowHPx = Math.round(fontSize*1.3) + 8;
+    headerRowHPx = shortRowHPx();
     rowHPx = Math.max(statRowH(), (availH - headerRowHPx) / Math.max(renderedRows, rowsPerPage()));
   } else if(fieldExpandedIdx!=null){
     // Only the expanded row gets the tall stat track; everyone else stays
     // at natural short height instead of stretching to fill availH.
-    headerRowHPx = Math.round(fontSize*1.3) + 8;
+    headerRowHPx = shortRowHPx();
     rowHeights = [];
     for(let r=r0;r<r1;r++) rowHeights.push(r===fieldExpandedIdx ? statRowH() : headerRowHPx);
   } else {
@@ -1340,10 +1403,11 @@ async function render(){
 
   const grid = document.getElementById('grid');
   const statRowTrack = stripOnCols() ? `${statRowH()}px ` : '';
+  const pinnedTrack = pinnedRaw.length ? `repeat(${pinnedRaw.length}, ${shortRowHPx()}px) ` : '';
   const rowsTrack = rowHeights ? rowHeights.map(h=>`${h}px`).join(' ') : `repeat(${renderedRows}, ${rowHPx}px)`;
   grid.classList.toggle('col-stats', stripOnCols());
   grid.style.gridTemplateColumns = `${RHW}px repeat(${renderedCols}, ${colWPx}px)`;
-  grid.style.gridTemplateRows = `${headerRowHPx}px ${statRowTrack}${rowsTrack}`;
+  grid.style.gridTemplateRows = `${headerRowHPx}px ${statRowTrack}${pinnedTrack}${rowsTrack}`;
   grid.innerHTML = '';
 
   const corner = document.createElement('div');
@@ -1362,7 +1426,7 @@ async function render(){
     }
     h.addEventListener('click', (e)=>{
       if(e.target.closest('.axis-ctl')) return; // icon clicks handled separately below
-      selR=null; selC=c;
+      selR=null; selPinnedRaw=null; selC=c;
       showSelected(label);
       applyHighlight();
     });
@@ -1377,6 +1441,53 @@ async function render(){
       grid.appendChild(cell);
     });
   }
+  // Frozen block: pinned rows always render here, above the paginated body,
+  // regardless of which page rowPage is on -- they were already excluded
+  // from visObs (see recomputeVisible), so there's no overlap to dedupe.
+  pinnedRaw.forEach((rawIdx, pi) => {
+    const label = meta.row_ids[rawIdx];
+    const isLast = pi === pinnedRaw.length - 1;
+    const rh = document.createElement('div');
+    rh.className = 'cell rh' + (isLast ? ' pin-last' : '');
+    rh.innerHTML = `<span class="hdr-label">${escapeHtml(label)}</span>` +
+      `<span class="axis-ctl"><button class="pin-btn on" data-raw="${rawIdx}" title="Unpin">📌</button></span>`;
+    rh.title = label;
+    rh.dataset.pinnedRaw = rawIdx;
+    rh.addEventListener('click', (e)=>{
+      if(e.target.closest('.axis-ctl')) return;
+      selR=null; selC=null; selPinnedRaw=rawIdx;
+      showSelected(label);
+      applyHighlight();
+    });
+    grid.appendChild(rh);
+    for(let c=c0;c<c1;c++){
+      const cell = document.createElement('div');
+      cell.dataset.pinnedRaw = rawIdx; cell.dataset.c = c;
+      if(mode==='data'){
+        const v = pinnedData[pi][c-c0];
+        cell.className = 'cell ' + (v===0 ? 'z' : 'nz') + (isLast ? ' pin-last' : '');
+        cell.textContent = Number.isInteger(v) ? v : v.toFixed(3);
+        cell.title = `${label}\n${colLabel(c)} = ${v}`;
+        cell.addEventListener('click', ()=>{
+          selR=null; selC=c; selPinnedRaw=rawIdx;
+          showSelected(`${label}  |  ${colLabel(c)}  =  ${v}`, v);
+          applyHighlight();
+        });
+      } else {
+        const raw = metaCellAtRaw(rawIdx, c);
+        const {text, cls} = formatMetaValue(raw);
+        cell.className = 'cell ' + cls + (isLast ? ' pin-last' : '');
+        cell.textContent = text;
+        cell.title = `${label}\n${colLabel(c)} = ${text}`;
+        cell.addEventListener('click', ()=>{
+          selR=null; selC=c; selPinnedRaw=rawIdx;
+          showSelected(`${label}  |  ${colLabel(c)}  =  ${text}`, raw);
+          applyHighlight();
+        });
+      }
+      grid.appendChild(cell);
+    }
+  });
   for(let r=r0;r<r1;r++){
     const label = rowLabel(r);
     const rh = document.createElement('div');
@@ -1392,13 +1503,14 @@ async function render(){
     } else if(mode==='col'){
       rh.innerHTML = `<span class="hdr-label">${escapeHtml(label)}</span>${axisControlsHtml('sample', colFields[r])}`;
     } else {
-      rh.textContent = label;
+      rh.innerHTML = `<span class="hdr-label">${escapeHtml(label)}</span>` +
+        `<span class="axis-ctl"><button class="pin-btn" data-raw="${obsAt(r)}" title="Pin to top">📌</button></span>`;
     }
     rh.title = label;
     rh.dataset.r = r;
     rh.addEventListener('click', (e)=>{
       if(e.target.closest('.axis-ctl')) return;
-      selR=r; selC=null;
+      selR=r; selC=null; selPinnedRaw=null;
       showSelected(label);
       applyHighlight();
     });
@@ -1416,7 +1528,7 @@ async function render(){
         cell.textContent = Number.isInteger(v) ? v : v.toFixed(3);
         cell.title = `${rowLabel(r)}\n${colLabel(c)} = ${v}`;
         cell.addEventListener('click', ()=>{
-          selR=r; selC=c;
+          selR=r; selC=c; selPinnedRaw=null;
           showSelected(`${rowLabel(r)}  |  ${colLabel(c)}  =  ${v}`, v);
           applyHighlight();
         });
@@ -1427,7 +1539,7 @@ async function render(){
         cell.textContent = text;
         cell.title = `${rowLabel(r)}\n${colLabel(c)} = ${text}`;
         cell.addEventListener('click', ()=>{
-          selR=r; selC=c;
+          selR=r; selC=c; selPinnedRaw=null;
           showSelected(`${rowLabel(r)}  |  ${colLabel(c)}  =  ${text}`, raw);
           applyHighlight();
         });
@@ -1447,6 +1559,22 @@ function copySelected(){
   let ok=false;
   try{ ok = document.execCommand('copy'); }catch(err){}
   if(!ok && navigator.clipboard) navigator.clipboard.writeText(inp.value).catch(()=>{});
+}
+
+// Same non-secure-context issue as copySelected: navigator.clipboard is
+// undefined under pywebview, so every modal Copy button needs the
+// execCommand fallback via a throwaway textarea instead of calling it directly.
+function writeClipboard(text){
+  if(navigator.clipboard){ navigator.clipboard.writeText(text).catch(()=>execCommandCopy(text)); }
+  else{ execCommandCopy(text); }
+}
+function execCommandCopy(text){
+  const ta=document.createElement('textarea');
+  ta.value=text; ta.style.position='fixed'; ta.style.opacity='0';
+  document.body.appendChild(ta);
+  ta.focus(); ta.select();
+  try{ document.execCommand('copy'); }catch(err){}
+  document.body.removeChild(ta);
 }
 
 // `raw` is the underlying cell/field value alone (no "row | col =" framing) --
@@ -1477,7 +1605,7 @@ function openCellModal(){
 }
 document.getElementById('expandBtn').onclick = openCellModal;
 document.getElementById('cellCopy').onclick = ()=>{
-  navigator.clipboard.writeText(document.getElementById('cellBlock').textContent);
+  writeClipboard(document.getElementById('cellBlock').textContent);
 };
 document.getElementById('cellClose').onclick = ()=>document.getElementById('cellOverlay').classList.remove('open');
 document.getElementById('cellOverlay').addEventListener('click', (e)=>{
@@ -1494,7 +1622,7 @@ function openValuesModal(s, label){
   document.getElementById('valuesOverlay').classList.add('open');
 }
 document.getElementById('valuesCopy').onclick = ()=>{
-  navigator.clipboard.writeText(lastValuesText);
+  writeClipboard(lastValuesText);
 };
 document.getElementById('valuesClose').onclick = ()=>document.getElementById('valuesOverlay').classList.remove('open');
 document.getElementById('valuesOverlay').addEventListener('click', (e)=>{
@@ -1625,6 +1753,10 @@ function undeleteField(axis, field){
 function renderAxisChips(){
   const el = document.getElementById('axisChips');
   const chips = [];
+  if(pinnedObs.size>0){
+    chips.push(`<span class="chip">📌 ${pinnedObs.size} pinned` +
+      `<button class="chip-x" data-kind="unpinAll">✕</button></span>`);
+  }
   ['observation','sample'].forEach(axis=>{
     const st = axisState[axis];
     if(st.sortDir!==0){
@@ -1656,6 +1788,13 @@ function renderAxisChips(){
     else if(kind==='replace') btn.onclick = ()=>removeReplacement(btn.dataset.axis, btn.dataset.field);
     else if(kind==='unrename') btn.onclick = ()=>unrenameField(btn.dataset.axis, btn.dataset.field);
     else if(kind==='undelete') btn.onclick = ()=>undeleteField(btn.dataset.axis, btn.dataset.field);
+    else if(kind==='unpinAll') btn.onclick = ()=>{
+      pinnedObs.clear();
+      selPinnedRaw = null;
+      recomputeVisible('observation');
+      render();
+      renderAxisChips();
+    };
     else btn.onclick = ()=>removeFilter(btn.dataset.axis, btn.dataset.field);
   });
 }
@@ -1756,7 +1895,7 @@ function openExportModal(){
   document.getElementById('codeOverlay').classList.add('open');
 }
 document.getElementById('codeCopy').onclick = ()=>{
-  navigator.clipboard.writeText(document.getElementById('codeBlock').textContent);
+  writeClipboard(document.getElementById('codeBlock').textContent);
 };
 document.getElementById('codeClose').onclick = ()=>document.getElementById('codeOverlay').classList.remove('open');
 document.getElementById('codeOverlay').addEventListener('click', (e)=>{
@@ -1937,7 +2076,21 @@ document.getElementById('grid').addEventListener('click', (e)=>{
   if(filterBtn){ e.stopPropagation(); openFilterInput(filterBtn.dataset.axis, filterBtn.dataset.field, filterBtn); return; }
   const editBtn = e.target.closest('.axis-edit');
   if(editBtn){ e.stopPropagation(); openFieldPopover(editBtn.dataset.axis, editBtn.dataset.field, editBtn); return; }
+  const pinBtn = e.target.closest('.pin-btn');
+  if(pinBtn){ e.stopPropagation(); togglePin(parseInt(pinBtn.dataset.raw, 10)); return; }
 });
+
+function togglePin(rawIdx){
+  if(pinnedObs.has(rawIdx)) pinnedObs.delete(rawIdx); else pinnedObs.add(rawIdx);
+  if(selPinnedRaw===rawIdx) selPinnedRaw = null;
+  recomputeVisible('observation');
+  // Clamp rather than reset to page 0 -- pin/unpin is a high-frequency
+  // action (unlike sort/filter), a full page reset would be jarring.
+  const maxPage = Math.max(0, Math.ceil(rowsTotal()/rowsPerPage()) - 1);
+  rowPage = Math.min(rowPage, maxPage);
+  render();
+  renderAxisChips();
+}
 
 function closeContextMenu(){
   const existing = document.getElementById('ctxMenu');
@@ -2052,18 +2205,37 @@ function fillerCell(){
 function applyHighlight(){
   document.querySelectorAll('#grid .hl-row,#grid .hl-col,#grid .hl-cell')
     .forEach(el=>el.classList.remove('hl-row','hl-col','hl-cell'));
-  if(selR===null && selC===null) return;
-  // Excel-style: a single selected cell (both selR and selC set) only tints
-  // its row/column headers, not the whole row/column body — the cell itself
-  // gets the outline instead.
-  const cellSelected = selR!==null && selC!==null;
-  document.querySelectorAll('#grid [data-r],#grid [data-c]').forEach(el=>{
+  if(selR===null && selPinnedRaw===null && selC===null) return;
+  // Excel-style: a single selected cell (a row identity + selC both set)
+  // only tints its row/column headers, not the whole row/column body — the
+  // cell itself gets the outline instead. selR and selPinnedRaw are two
+  // mutually-exclusive "which row" slots (paginated vs. frozen) since a
+  // frozen row's raw index has no meaningful position in visObs to share
+  // selR's numbering with.
+  const rowSelected = selR!==null || selPinnedRaw!==null;
+  const cellSelected = rowSelected && selC!==null;
+  // Paginated cells/headers -- explicitly excludes frozen body cells (which
+  // also carry data-c) since those are keyed by data-pinned-raw, not data-r,
+  // and would otherwise get miscounted as "headers" here for lacking data-r.
+  document.querySelectorAll('#grid [data-r],#grid [data-c]:not([data-pinned-raw])').forEach(el=>{
     const r = el.dataset.r!==undefined ? parseInt(el.dataset.r) : null;
     const c = el.dataset.c!==undefined ? parseInt(el.dataset.c) : null;
     const isHeader = r===null || c===null;
     if(selR!==null && r===selR && (isHeader || !cellSelected)) el.classList.add('hl-row');
     if(selC!==null && c===selC && (isHeader || !cellSelected)) el.classList.add('hl-col');
-    if(cellSelected && r===selR && c===selC) el.classList.add('hl-cell');
+    if(cellSelected && selR!==null && r===selR && c===selC) el.classList.add('hl-cell');
+  });
+  // Frozen block -- same shape as above, keyed by pinned raw index instead
+  // of page position. Column highlight (hl-col) still applies here even
+  // when the selected row is a paginated one, so a column stays tinted
+  // across the whole grid including the frozen rows.
+  document.querySelectorAll('#grid [data-pinned-raw]').forEach(el=>{
+    const pr = parseInt(el.dataset.pinnedRaw);
+    const c = el.dataset.c!==undefined ? parseInt(el.dataset.c) : null;
+    const isHeader = c===null;
+    if(selPinnedRaw!==null && pr===selPinnedRaw && (isHeader || !cellSelected)) el.classList.add('hl-row');
+    if(selC!==null && c===selC && (isHeader || !cellSelected)) el.classList.add('hl-col');
+    if(cellSelected && selPinnedRaw!==null && pr===selPinnedRaw && c===selC) el.classList.add('hl-cell');
   });
 }
 
@@ -2131,7 +2303,7 @@ const rowAxisKey = m => m==='col' ? 'fields' : 'ids';
 const colAxisKey = m => m==='row' ? 'fields' : 'ids';
 modeBtns.forEach(b=>b.onclick = ()=>{
   const m = b.dataset.m;
-  if(rowAxisKey(m)!==rowAxisKey(mode)){ rowPage = 0; selR = null; }
+  if(rowAxisKey(m)!==rowAxisKey(mode)){ rowPage = 0; selR = null; selPinnedRaw = null; }
   if(colAxisKey(m)!==colAxisKey(mode)){ colPage = 0; selC = null; }
   setMode(m);
   render();
