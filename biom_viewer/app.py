@@ -691,6 +691,12 @@ let availH=0, availW=0;
 // flood the 50-entry undo stack or be ctrl-Z-able.
 let pinnedObs = new Set();
 let selPinnedRaw = null;
+// Same idea, one level up: in 'col' mode the "rows" are metadata field
+// names (colFields entries), a different identity space entirely -- keyed
+// by field name string (stable across sort; deleteField splices colFields
+// directly, see deleteField's cleanup) rather than a numeric index.
+let pinnedColFields = new Set();
+let selPinnedField = null;
 let summaryVisible=false;
 // In 'col' mode, double-clicking one row header expands just that field's
 // row to a stat summary (instead of summaryVisible's "expand every row").
@@ -795,27 +801,31 @@ function computeFit(){
   RHW = computeRHW();
   availW = mainRect.width - RHW - GAP;
 
+  // Pinned rows get a fixed track above the paged rows (see render()) --
+  // shrink the paged budget by that many so the frozen block + paged rows
+  // still fit availH together. Observations (data/row mode) and fields
+  // (col mode) are two different identity spaces, but the row-budget math
+  // only cares about the count.
+  const pinnedCount = (mode==='data'||mode==='row') ? pinnedObs.size
+    : mode==='col' ? pinnedColFields.size : 0;
+
   if(stripOnRows()){
     // The column-header row stays short (it's just sample/observation ids,
     // same as ever) -- only the field rows below it need the tall track,
-    // so only they should compete for the height budget.
-    autoRows = Math.max(1, Math.floor((availH - shortRowH) / statRowH()));
+    // so only they should compete for the height budget. Frozen fields get
+    // the same tall track in this view (they're rendered as stat rows
+    // too), so they compete for it exactly like paged fields do.
+    autoRows = Math.max(1, Math.floor((availH - shortRowH) / statRowH()) - pinnedCount);
   } else if(mode==='col' && expandedFieldRow!=null){
     // One field row is expanded to a stat block; the rest stay short. This
     // reserves the budget even if the expanded row isn't on the current
     // page -- ponytail: slightly conservative, avoids a fit/page chicken-egg.
-    autoRows = Math.max(1, Math.floor((availH - shortRowH - statRowH()) / shortRowH) + 1);
+    // Frozen fields are never the expanded one (see colFieldsForPaging),
+    // so they always cost one short track each here.
+    autoRows = Math.max(1, Math.floor((availH - shortRowH - statRowH()) / shortRowH) + 1 - pinnedCount);
   } else {
     const totalRowsTarget = Math.max(2, Math.floor(availH/shortRowH)); // includes header row
-    autoRows = totalRowsTarget - 1;
-    // Pinned rows get their own fixed track above the paged rows (see
-    // render()), at the same shortRowH each -- shrink the paged budget by
-    // that many so the frozen block + paged rows still fit availH together.
-    // Neither of the two branches above applies here: both are 'col'-mode
-    // only, and pinning is scoped to data/row mode.
-    if((mode==='data'||mode==='row') && pinnedObs.size>0){
-      autoRows = Math.max(1, autoRows - pinnedObs.size);
-    }
+    autoRows = Math.max(1, totalRowsTarget - 1 - pinnedCount);
   }
 
   autoCols = Math.max(1, Math.floor(availW/COLW_TARGET));
@@ -915,6 +925,21 @@ function selectObservationRow(rawIdx){
   selR = pos;
 }
 
+// Same idea for jumpTo's 'colField' branch (search "jump to a metadata
+// field" in col mode) -- colFields itself is never filtered/sorted like
+// visObs, so there's no resolveAxisPosition equivalent to fall through to;
+// a non-pinned field's position is just its index in colFieldsForPaging().
+function selectColField(field){
+  if(pinnedColFields.has(field)){
+    selR = null; selPinnedField = field;
+    return;
+  }
+  selPinnedField = null;
+  const pos = colFieldsForPaging().indexOf(field);
+  rowPage = Math.floor(Math.max(0, pos) / rowsPerPage());
+  selR = pos;
+}
+
 const modeBtns = [...document.querySelectorAll('#modeGroup button')];
 
 function setMode(m){
@@ -958,15 +983,26 @@ function pageBounds(page, perPage, total){
   return [start, Math.min(start+perPage, total)];
 }
 
+// 'col' mode's row axis is colFields itself (field names), not an
+// obsAt()-style index into a fixed-size axis -- pinning a field excludes it
+// from this the same way pinning an observation excludes it from visObs.
+// Applied uniformly regardless of stripOnRows()/expandedFieldRow so the
+// paged position space never shifts shape when *those* toggle -- only
+// pinning itself changes it, matching visObs's contract.
+function colFieldsForPaging(){
+  return pinnedColFields.size ? colFields.filter(f=>!pinnedColFields.has(f)) : colFields;
+}
+function colFieldAt(i){ return colFieldsForPaging()[i]; }
+
 // Row/column axis for the grid currently on screen — depends on mode.
 // 'row' mode only swaps the COLUMN axis (fields replace samples); the row
 // axis (observation ids) stays exactly as in 'data' mode.
 // 'col' mode only swaps the ROW axis (fields replace observations); the
 // column axis (sample ids) stays exactly as in 'data' mode.
-function rowsTotal(){ return mode==='col' ? colFields.length : (visObs ? visObs.length : meta.rows); }
+function rowsTotal(){ return mode==='col' ? colFieldsForPaging().length : (visObs ? visObs.length : meta.rows); }
 function colsTotal(){ return mode==='row' ? rowFields.length : (visSample ? visSample.length : meta.cols); }
 function fieldDisplay(axis, field){ return axisState[axis].renames[field] || field; }
-function rowLabel(i){ return mode==='col' ? fieldDisplay('sample', colFields[i]) : meta.row_ids[obsAt(i)]; }
+function rowLabel(i){ return mode==='col' ? fieldDisplay('sample', colFieldAt(i)) : meta.row_ids[obsAt(i)]; }
 function colLabel(j){ return mode==='row' ? fieldDisplay('observation', rowFields[j]) : meta.col_ids[sampleAt(j)]; }
 
 function formatMetaValue(v){
@@ -996,15 +1032,21 @@ function metaCellAt(i, j){
     return entry ? applyReplacements('observation', field, entry[field]) : null;
   }
   // mode==='col': row axis = field i (unaffected), col axis = sample sampleAt(j)
+  return metaCellForField(colFieldAt(i), j);
+}
+
+// Frozen field rows (col mode) already know their field directly -- no
+// position to run colFieldAt() on, same reasoning as metaCellAtRaw.
+function metaCellForField(field, j){
   const entry = meta.col_metadata && meta.col_metadata[sampleAt(j)];
-  const field = colFields[i];
   return entry ? applyReplacements('sample', field, entry[field]) : null;
 }
 
-// Pinned/frozen rows already have a raw observation index (they're excluded
+// Pinned/frozen observation rows already have a raw index (they're excluded
 // from visObs, so there's no page position to run through obsAt()) --
 // metaCellAt(i,j)'s row-mode branch inlined against a raw index directly.
-// Only needed for 'row' mode; pinning never applies in 'col' mode.
+// Only needed for 'row' mode; col-mode's own frozen fields use colFieldAt()
+// directly instead, since field pinning excludes by name, not by index.
 function metaCellAtRaw(rawIdx, j){
   const entry = meta.row_metadata && meta.row_metadata[rawIdx];
   const field = rowFields[j];
@@ -1305,8 +1347,8 @@ async function jumpTo(entry){
     selR = null; selC = entry.i;
   } else if(entry.type==='colField'){
     setMode('col');
-    rowPage = Math.floor(entry.i / rowsPerPage());
-    selR = entry.i; selC = null;
+    selectColField(colFields[entry.i]);
+    selC = null;
   } else if(entry.type==='rowValue'){
     setMode('row');
     selectObservationRow(entry.i);
@@ -1349,6 +1391,11 @@ async function render(){
   // visObs (see recomputeVisible) -- sorted by raw index for a stable,
   // predictable frozen-block order that doesn't reshuffle on pin/unpin.
   const pinnedRaw = (mode==='data'||mode==='row') ? [...pinnedObs].sort((a,b)=>a-b) : [];
+  // 'col' mode's frozen rows are fields, not observations -- order follows
+  // colFields' own (stable, delete/undelete-only) order rather than Set
+  // insertion order, for the same reshuffle-avoidance reason as above.
+  const pinnedFieldsOrdered = mode==='col' ? colFields.filter(f=>pinnedColFields.has(f)) : [];
+  const pinnedCount = (mode==='data'||mode==='row') ? pinnedRaw.length : pinnedFieldsOrdered.length;
 
   let data = null, pinnedData = null;
   if(mode==='data'){
@@ -1374,17 +1421,29 @@ async function render(){
   let headerRowHPx, rowHeights = null;
   if(stripOnRows()){
     // Column headers stay short; only the field rows below need the tall
-    // track, so the header doesn't compete with them for height.
+    // track, so the header doesn't compete with them for height. Frozen
+    // fields get the same tall track in this view (see the frozen-block
+    // build below), so their fixed pixel cost has to come out of the same
+    // budget before the paged rows stretch to fill what's left.
     headerRowHPx = shortRowHPx();
-    rowHPx = Math.max(statRowH(), (availH - headerRowHPx) / Math.max(renderedRows, rowsPerPage()));
+    const pinnedBlockPx = pinnedCount * statRowH();
+    rowHPx = Math.max(statRowH(), (availH - headerRowHPx - pinnedBlockPx) / Math.max(renderedRows, rowsPerPage()));
   } else if(fieldExpandedIdx!=null){
     // Only the expanded row gets the tall stat track; everyone else stays
-    // at natural short height instead of stretching to fill availH.
+    // at natural short height instead of stretching to fill availH. Frozen
+    // fields are never the expanded one (pinning excludes a field from the
+    // paged position space that expandedFieldRow indexes into), so they
+    // always use the short track -- computeFit() already reserved that.
     headerRowHPx = shortRowHPx();
     rowHeights = [];
     for(let r=r0;r<r1;r++) rowHeights.push(r===fieldExpandedIdx ? statRowH() : headerRowHPx);
   } else {
-    rowHPx = availH/(Math.max(renderedRows, rowsPerPage())+1);
+    // Frozen rows use a fixed shortRowHPx() track (see gridTemplateRows
+    // below), not this branch's stretchy rowHPx -- subtract their pixel
+    // cost first so the paged rows' stretch target doesn't silently push
+    // the grid's total height past availH by the frozen block's height.
+    const pinnedBlockPx = pinnedCount * shortRowHPx();
+    rowHPx = (availH - pinnedBlockPx) / (Math.max(renderedRows, rowsPerPage())+1);
     headerRowHPx = rowHPx;
   }
   colWPx = availW/renderedCols;
@@ -1395,15 +1454,22 @@ async function render(){
     ? await Promise.all(Array.from({length: renderedCols}, (_, k) => colStatsFetch(c0+k)))
     : null;
   const rowStats = stripOnRows()
-    ? await Promise.all(Array.from({length: renderedRows}, (_, k) => window.pywebview.api.field_summary('sample', colFields[r0+k], visSample)))
+    ? await Promise.all(Array.from({length: renderedRows}, (_, k) => window.pywebview.api.field_summary('sample', colFieldAt(r0+k), visSample)))
+    : null;
+  // Pinned fields render as stat rows too when the strip view is on (see
+  // the frozen-block build below) -- fetch their stats the same way.
+  const pinnedFieldStats = (stripOnRows() && pinnedFieldsOrdered.length)
+    ? await Promise.all(pinnedFieldsOrdered.map(f => window.pywebview.api.field_summary('sample', f, visSample)))
     : null;
   const fieldExpandedStat = fieldExpandedIdx!=null
-    ? await window.pywebview.api.field_summary('sample', colFields[fieldExpandedIdx], visSample)
+    ? await window.pywebview.api.field_summary('sample', colFieldAt(fieldExpandedIdx), visSample)
     : null;
 
   const grid = document.getElementById('grid');
   const statRowTrack = stripOnCols() ? `${statRowH()}px ` : '';
-  const pinnedTrack = pinnedRaw.length ? `repeat(${pinnedRaw.length}, ${shortRowHPx()}px) ` : '';
+  const pinnedFieldRowH = stripOnRows() ? statRowH() : shortRowHPx();
+  const pinnedTrack = pinnedRaw.length ? `repeat(${pinnedRaw.length}, ${shortRowHPx()}px) `
+    : pinnedFieldsOrdered.length ? `repeat(${pinnedFieldsOrdered.length}, ${pinnedFieldRowH}px) ` : '';
   const rowsTrack = rowHeights ? rowHeights.map(h=>`${h}px`).join(' ') : `repeat(${renderedRows}, ${rowHPx}px)`;
   grid.classList.toggle('col-stats', stripOnCols());
   grid.style.gridTemplateColumns = `${RHW}px repeat(${renderedCols}, ${colWPx}px)`;
@@ -1426,7 +1492,7 @@ async function render(){
     }
     h.addEventListener('click', (e)=>{
       if(e.target.closest('.axis-ctl')) return; // icon clicks handled separately below
-      selR=null; selPinnedRaw=null; selC=c;
+      selR=null; selPinnedRaw=null; selPinnedField=null; selC=c;
       showSelected(label);
       applyHighlight();
     });
@@ -1455,7 +1521,7 @@ async function render(){
     rh.dataset.pinnedRaw = rawIdx;
     rh.addEventListener('click', (e)=>{
       if(e.target.closest('.axis-ctl')) return;
-      selR=null; selC=null; selPinnedRaw=rawIdx;
+      selR=null; selC=null; selPinnedRaw=rawIdx; selPinnedField=null;
       showSelected(label);
       applyHighlight();
     });
@@ -1469,7 +1535,7 @@ async function render(){
         cell.textContent = Number.isInteger(v) ? v : v.toFixed(3);
         cell.title = `${label}\n${colLabel(c)} = ${v}`;
         cell.addEventListener('click', ()=>{
-          selR=null; selC=c; selPinnedRaw=rawIdx;
+          selR=null; selC=c; selPinnedRaw=rawIdx; selPinnedField=null;
           showSelected(`${label}  |  ${colLabel(c)}  =  ${v}`, v);
           applyHighlight();
         });
@@ -1480,11 +1546,56 @@ async function render(){
         cell.textContent = text;
         cell.title = `${label}\n${colLabel(c)} = ${text}`;
         cell.addEventListener('click', ()=>{
-          selR=null; selC=c; selPinnedRaw=rawIdx;
+          selR=null; selC=c; selPinnedRaw=rawIdx; selPinnedField=null;
           showSelected(`${label}  |  ${colLabel(c)}  =  ${text}`, raw);
           applyHighlight();
         });
       }
+      grid.appendChild(cell);
+    }
+  });
+  // Same idea, one axis over: pinned fields (col mode) always render here
+  // too, using the same stat-strip-vs-plain branch as the paginated fields
+  // below so a pinned field still shows its stats when that view is on --
+  // never the single-expanded-field view, since a field can't be both
+  // pinned (excluded from the paged position space) and expandedFieldRow
+  // (a position within it) at once.
+  pinnedFieldsOrdered.forEach((field, pi) => {
+    const label = fieldDisplay('sample', field);
+    const isLast = pi === pinnedFieldsOrdered.length - 1;
+    const rh = document.createElement('div');
+    rh.className = 'cell rh' + (isLast ? ' pin-last' : '');
+    if(stripOnRows()){
+      rh.classList.add('rh-stats');
+      rh.innerHTML = `<div class="stat-line rh-label">${escapeHtml(label)}</div>` + statCellHtml(pinnedFieldStats[pi]) +
+        `<span class="axis-ctl"><button class="pin-btn on" data-field="${escapeHtml(field)}" title="Unpin">📌</button></span>`;
+      wireStatOther(rh, pinnedFieldStats[pi], label);
+    } else {
+      rh.innerHTML = `<span class="hdr-label">${escapeHtml(label)}</span>${axisControlsHtml('sample', field)}` +
+        `<span class="axis-ctl"><button class="pin-btn on" data-field="${escapeHtml(field)}" title="Unpin">📌</button></span>`;
+    }
+    rh.title = label;
+    rh.dataset.pinnedField = field;
+    rh.addEventListener('click', (e)=>{
+      if(e.target.closest('.axis-ctl')) return;
+      selR=null; selC=null; selPinnedField=field; selPinnedRaw=null;
+      showSelected(label);
+      applyHighlight();
+    });
+    grid.appendChild(rh);
+    for(let c=c0;c<c1;c++){
+      const cell = document.createElement('div');
+      cell.dataset.pinnedField = field; cell.dataset.c = c;
+      const raw = metaCellForField(field, c);
+      const {text, cls} = formatMetaValue(raw);
+      cell.className = 'cell ' + cls + (isLast ? ' pin-last' : '');
+      cell.textContent = text;
+      cell.title = `${label}\n${colLabel(c)} = ${text}`;
+      cell.addEventListener('click', ()=>{
+        selR=null; selC=c; selPinnedField=field; selPinnedRaw=null;
+        showSelected(`${label}  |  ${colLabel(c)}  =  ${text}`, raw);
+        applyHighlight();
+      });
       grid.appendChild(cell);
     }
   });
@@ -1501,7 +1612,9 @@ async function render(){
       rh.innerHTML = `<div class="stat-line rh-label">${escapeHtml(label)}</div>` + statCellHtml(fieldExpandedStat);
       wireStatOther(rh, fieldExpandedStat, label);
     } else if(mode==='col'){
-      rh.innerHTML = `<span class="hdr-label">${escapeHtml(label)}</span>${axisControlsHtml('sample', colFields[r])}`;
+      const field = colFieldAt(r);
+      rh.innerHTML = `<span class="hdr-label">${escapeHtml(label)}</span>${axisControlsHtml('sample', field)}` +
+        `<span class="axis-ctl"><button class="pin-btn" data-field="${escapeHtml(field)}" title="Pin to top">📌</button></span>`;
     } else {
       rh.innerHTML = `<span class="hdr-label">${escapeHtml(label)}</span>` +
         `<span class="axis-ctl"><button class="pin-btn" data-raw="${obsAt(r)}" title="Pin to top">📌</button></span>`;
@@ -1510,7 +1623,7 @@ async function render(){
     rh.dataset.r = r;
     rh.addEventListener('click', (e)=>{
       if(e.target.closest('.axis-ctl')) return;
-      selR=r; selC=null; selPinnedRaw=null;
+      selR=r; selC=null; selPinnedRaw=null; selPinnedField=null;
       showSelected(label);
       applyHighlight();
     });
@@ -1528,7 +1641,7 @@ async function render(){
         cell.textContent = Number.isInteger(v) ? v : v.toFixed(3);
         cell.title = `${rowLabel(r)}\n${colLabel(c)} = ${v}`;
         cell.addEventListener('click', ()=>{
-          selR=r; selC=c; selPinnedRaw=null;
+          selR=r; selC=c; selPinnedRaw=null; selPinnedField=null;
           showSelected(`${rowLabel(r)}  |  ${colLabel(c)}  =  ${v}`, v);
           applyHighlight();
         });
@@ -1539,7 +1652,7 @@ async function render(){
         cell.textContent = text;
         cell.title = `${rowLabel(r)}\n${colLabel(c)} = ${text}`;
         cell.addEventListener('click', ()=>{
-          selR=r; selC=c; selPinnedRaw=null;
+          selR=r; selC=c; selPinnedRaw=null; selPinnedField=null;
           showSelected(`${rowLabel(r)}  |  ${colLabel(c)}  =  ${text}`, raw);
           applyHighlight();
         });
@@ -1731,6 +1844,13 @@ function deleteField(axis, field){
   axisState[axis].filters = axisState[axis].filters.filter(f=>f.field!==field);
   axisState[axis].replacements = axisState[axis].replacements.filter(r=>r.field!==field);
   if(axisState[axis].sortField===field){ axisState[axis].sortField=null; axisState[axis].sortDir=0; }
+  // A pinned field just got deleted out from under colFields -- drop it
+  // from pinnedColFields too, else it lingers pointing at a field that no
+  // longer exists (harmless in practice, but a stale ghost in the chip).
+  if(axis==='sample' && pinnedColFields.has(field)){
+    pinnedColFields.delete(field);
+    if(selPinnedField===field) selPinnedField = null;
+  }
   recomputeVisible(axis);
   rowPage=0; colPage=0;
   render();
@@ -1756,6 +1876,10 @@ function renderAxisChips(){
   if(pinnedObs.size>0){
     chips.push(`<span class="chip">📌 ${pinnedObs.size} pinned` +
       `<button class="chip-x" data-kind="unpinAll">✕</button></span>`);
+  }
+  if(pinnedColFields.size>0){
+    chips.push(`<span class="chip">📌 ${pinnedColFields.size} pinned field${pinnedColFields.size===1?'':'s'}` +
+      `<button class="chip-x" data-kind="unpinAllFields">✕</button></span>`);
   }
   ['observation','sample'].forEach(axis=>{
     const st = axisState[axis];
@@ -1792,6 +1916,12 @@ function renderAxisChips(){
       pinnedObs.clear();
       selPinnedRaw = null;
       recomputeVisible('observation');
+      render();
+      renderAxisChips();
+    };
+    else if(kind==='unpinAllFields') btn.onclick = ()=>{
+      pinnedColFields.clear();
+      selPinnedField = null;
       render();
       renderAxisChips();
     };
@@ -2077,7 +2207,12 @@ document.getElementById('grid').addEventListener('click', (e)=>{
   const editBtn = e.target.closest('.axis-edit');
   if(editBtn){ e.stopPropagation(); openFieldPopover(editBtn.dataset.axis, editBtn.dataset.field, editBtn); return; }
   const pinBtn = e.target.closest('.pin-btn');
-  if(pinBtn){ e.stopPropagation(); togglePin(parseInt(pinBtn.dataset.raw, 10)); return; }
+  if(pinBtn){
+    e.stopPropagation();
+    if(pinBtn.dataset.field!==undefined) togglePinField(pinBtn.dataset.field);
+    else togglePin(parseInt(pinBtn.dataset.raw, 10));
+    return;
+  }
 });
 
 function togglePin(rawIdx){
@@ -2086,6 +2221,15 @@ function togglePin(rawIdx){
   recomputeVisible('observation');
   // Clamp rather than reset to page 0 -- pin/unpin is a high-frequency
   // action (unlike sort/filter), a full page reset would be jarring.
+  const maxPage = Math.max(0, Math.ceil(rowsTotal()/rowsPerPage()) - 1);
+  rowPage = Math.min(rowPage, maxPage);
+  render();
+  renderAxisChips();
+}
+
+function togglePinField(field){
+  if(pinnedColFields.has(field)) pinnedColFields.delete(field); else pinnedColFields.add(field);
+  if(selPinnedField===field) selPinnedField = null;
   const maxPage = Math.max(0, Math.ceil(rowsTotal()/rowsPerPage()) - 1);
   rowPage = Math.min(rowPage, maxPage);
   render();
@@ -2205,19 +2349,20 @@ function fillerCell(){
 function applyHighlight(){
   document.querySelectorAll('#grid .hl-row,#grid .hl-col,#grid .hl-cell')
     .forEach(el=>el.classList.remove('hl-row','hl-col','hl-cell'));
-  if(selR===null && selPinnedRaw===null && selC===null) return;
+  if(selR===null && selPinnedRaw===null && selPinnedField===null && selC===null) return;
   // Excel-style: a single selected cell (a row identity + selC both set)
   // only tints its row/column headers, not the whole row/column body — the
-  // cell itself gets the outline instead. selR and selPinnedRaw are two
-  // mutually-exclusive "which row" slots (paginated vs. frozen) since a
-  // frozen row's raw index has no meaningful position in visObs to share
-  // selR's numbering with.
-  const rowSelected = selR!==null || selPinnedRaw!==null;
+  // cell itself gets the outline instead. selR/selPinnedRaw/selPinnedField
+  // are mutually-exclusive "which row" slots (paginated observations,
+  // frozen observations, frozen fields) since none of their identities
+  // share a common position space with the others.
+  const rowSelected = selR!==null || selPinnedRaw!==null || selPinnedField!==null;
   const cellSelected = rowSelected && selC!==null;
   // Paginated cells/headers -- explicitly excludes frozen body cells (which
-  // also carry data-c) since those are keyed by data-pinned-raw, not data-r,
-  // and would otherwise get miscounted as "headers" here for lacking data-r.
-  document.querySelectorAll('#grid [data-r],#grid [data-c]:not([data-pinned-raw])').forEach(el=>{
+  // also carry data-c) since those are keyed by data-pinned-raw/-field, not
+  // data-r, and would otherwise get miscounted as "headers" here for
+  // lacking data-r.
+  document.querySelectorAll('#grid [data-r],#grid [data-c]:not([data-pinned-raw]):not([data-pinned-field])').forEach(el=>{
     const r = el.dataset.r!==undefined ? parseInt(el.dataset.r) : null;
     const c = el.dataset.c!==undefined ? parseInt(el.dataset.c) : null;
     const isHeader = r===null || c===null;
@@ -2225,10 +2370,10 @@ function applyHighlight(){
     if(selC!==null && c===selC && (isHeader || !cellSelected)) el.classList.add('hl-col');
     if(cellSelected && selR!==null && r===selR && c===selC) el.classList.add('hl-cell');
   });
-  // Frozen block -- same shape as above, keyed by pinned raw index instead
-  // of page position. Column highlight (hl-col) still applies here even
-  // when the selected row is a paginated one, so a column stays tinted
-  // across the whole grid including the frozen rows.
+  // Frozen observation rows (data/row mode) -- same shape as above, keyed
+  // by pinned raw index instead of page position. Column highlight (hl-col)
+  // still applies here even when the selected row is a paginated one, so a
+  // column stays tinted across the whole grid including the frozen rows.
   document.querySelectorAll('#grid [data-pinned-raw]').forEach(el=>{
     const pr = parseInt(el.dataset.pinnedRaw);
     const c = el.dataset.c!==undefined ? parseInt(el.dataset.c) : null;
@@ -2236,6 +2381,15 @@ function applyHighlight(){
     if(selPinnedRaw!==null && pr===selPinnedRaw && (isHeader || !cellSelected)) el.classList.add('hl-row');
     if(selC!==null && c===selC && (isHeader || !cellSelected)) el.classList.add('hl-col');
     if(cellSelected && selPinnedRaw!==null && pr===selPinnedRaw && c===selC) el.classList.add('hl-cell');
+  });
+  // Frozen fields (col mode) -- same shape again, keyed by field name.
+  document.querySelectorAll('#grid [data-pinned-field]').forEach(el=>{
+    const pf = el.dataset.pinnedField;
+    const c = el.dataset.c!==undefined ? parseInt(el.dataset.c) : null;
+    const isHeader = c===null;
+    if(selPinnedField!==null && pf===selPinnedField && (isHeader || !cellSelected)) el.classList.add('hl-row');
+    if(selC!==null && c===selC && (isHeader || !cellSelected)) el.classList.add('hl-col');
+    if(cellSelected && selPinnedField!==null && pf===selPinnedField && c===selC) el.classList.add('hl-cell');
   });
 }
 
@@ -2303,7 +2457,7 @@ const rowAxisKey = m => m==='col' ? 'fields' : 'ids';
 const colAxisKey = m => m==='row' ? 'fields' : 'ids';
 modeBtns.forEach(b=>b.onclick = ()=>{
   const m = b.dataset.m;
-  if(rowAxisKey(m)!==rowAxisKey(mode)){ rowPage = 0; selR = null; selPinnedRaw = null; }
+  if(rowAxisKey(m)!==rowAxisKey(mode)){ rowPage = 0; selR = null; selPinnedRaw = null; selPinnedField = null; }
   if(colAxisKey(m)!==colAxisKey(mode)){ colPage = 0; selC = null; }
   setMode(m);
   render();
