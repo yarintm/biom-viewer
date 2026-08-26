@@ -2428,8 +2428,61 @@ function setFontSize(px){
   rowPage=0; colPage=0; render();
 }
 
+// Arrow-key traversal of the grid. Every other way of moving through this
+// table -- paging, selecting, reading a value -- needed the mouse, which
+// for a spreadsheet-shaped app is the one keyboard gap that actually
+// matters. Selection drives the page rather than the other way round: step
+// off the bottom row and the page follows, so the whole axis is reachable
+// without ever touching the nav buttons.
+// Deliberately does not copy: clicking a cell copies it on purpose, but
+// holding down an arrow key must not overwrite the clipboard 40 times.
+// Each step is a full render, and crossing a page boundary is a real fetch
+// over the pywebview bridge. Auto-repeat outruns that easily, so a step
+// that arrives mid-flight is dropped rather than queued -- the cursor lags
+// the key a little instead of running on for seconds after it's released.
+let moveInFlight = false;
+async function moveSelection(dr, dc){
+  if(moveInFlight) return;
+  moveInFlight = true;
+  try{ await moveSelectionStep(dr, dc); } finally { moveInFlight = false; }
+}
+async function moveSelectionStep(dr, dc){
+  if(selR===null || selC===null){
+    // No paged cell selected yet (nothing selected, or the selection is a
+    // frozen row, which lives in a different keying scheme) -- start at the
+    // top-left of whatever page is on screen instead of jumping elsewhere.
+    selR = rowPage*rowsPerPage();
+    selC = colPage*colsPerPage();
+  } else {
+    selR = Math.max(0, Math.min(rowsTotal()-1, selR + dr));
+    selC = Math.max(0, Math.min(colsTotal()-1, selC + dc));
+  }
+  selPinnedRaw = null; selPinnedField = null;
+  rowPage = Math.floor(selR/rowsPerPage());
+  colPage = Math.floor(selC/colsPerPage());
+  await render();
+  const cell = document.querySelector(`#grid .cell[data-r="${selR}"][data-c="${selC}"]`);
+  if(cell){
+    suppressSelectionCopy = true;
+    try{ cell.click(); } finally { suppressSelectionCopy = false; }
+  }
+}
+const ARROW_DELTA = {ArrowUp:[-1,0], ArrowDown:[1,0], ArrowLeft:[0,-1], ArrowRight:[0,1]};
+
 document.addEventListener('keydown', (e)=>{
   const mod = e.metaKey || e.ctrlKey;
+  // Arrows belong to whatever is focused (the search box runs its own
+  // result-list navigation) and to any open popover or modal, so the grid
+  // only claims them when nothing else is up.
+  if(!mod && !e.altKey && ARROW_DELTA[e.key] && meta
+     && !/^(INPUT|TEXTAREA|SELECT)$/.test((document.activeElement||{}).tagName||'')
+     && !document.getElementById('ctxMenu') && !document.getElementById('filterPopover')
+     && !document.getElementById('viewsPopover') && !document.getElementById('confirmPopover')
+     && !document.querySelector('.wm-overlay.open')){
+    e.preventDefault();
+    moveSelection(...ARROW_DELTA[e.key]);
+    return;
+  }
   if(mod){
     const k = e.key.toLowerCase();
     if(k==='f'){ e.preventDefault(); document.getElementById('searchBox').focus(); }

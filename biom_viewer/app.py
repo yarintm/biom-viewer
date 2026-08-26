@@ -589,7 +589,7 @@ PAGE = """<!doctype html>
        the instructional prose it is (system font) while real selected
        content still lands in the monospace value slot -- and so it comes
        back on its own if the field is ever cleared. -->
-  <input id="selected" readonly placeholder="Click a row, column, or cell to see its full text here (auto-copied to clipboard). Double-click a header to toggle summary stats.">
+  <input id="selected" readonly placeholder="Click a row, column, or cell to see its full text here (auto-copied). Arrow keys move the selection; double-click a header for summary stats.">
   <button class="tool" id="expandBtn" title="View full content in a window (⌘⏎)">⤢</button>
 </div>
 
