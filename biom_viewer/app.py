@@ -609,8 +609,10 @@ PAGE = """<!doctype html>
              border:1px solid var(--input-border);border-radius:var(--radius-sm);padding:5px 9px;font-size:12.5px;outline:none;
              transition:border-color var(--dur) var(--ease)}
   #searchBox:focus{border-color:var(--sel-outline)}
-  #searchPin{padding:4px 7px;font-size:12px;opacity:.45}
-  #searchPin.on{opacity:1;border-color:var(--accent);background:var(--hl)}
+  #searchPin,#searchPin:hover{border-color:transparent}
+  #searchPin{padding:4px 6px;font-size:13px;opacity:.4;background:none}
+  #searchPin:hover{opacity:.75;background:var(--hl)}
+  #searchPin.on{opacity:1;background:var(--hl)}
   #searchResults{position:absolute;top:calc(100% + 6px);right:0;width:420px;max-height:60vh;overflow-y:auto;
              background:var(--panel-raised);border:1px solid var(--border);border-radius:var(--radius-md);
              box-shadow:var(--shadow-md);display:none;z-index:20}
@@ -660,26 +662,16 @@ PAGE = """<!doctype html>
   .rh:hover{background:var(--input-border)}
   .hdr.colhdr{cursor:pointer}
   .hdr.colhdr:hover{background:var(--input-border)}
-  .hdr.colhdr:has(.axis-ctl),.rh:has(.axis-ctl){display:flex;align-items:center}
-  .hdr-label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0}
-  /* Row-header identifiers (e.g. taxonomy strings "k__Bacteria|p__...|s__species")
-     share a long common prefix and differ only near the end -- truncating from
-     the end (the default) makes most rows look identical. Truncating from the
-     start instead keeps the actually-distinguishing tail visible. Standard
-     CSS trick: flip the box to rtl so text-overflow's "end" is the left edge,
-     while unicode-bidi:plaintext keeps the Latin text itself reading LTR. */
-  .rh .hdr-label{direction:rtl;text-align:left;unicode-bidi:plaintext}
-  .axis-ctl{display:flex;gap:2px;margin-left:4px;flex:none}
-  .axis-ctl button{background:none;border:none;color:var(--dim);cursor:pointer;font-size:calc(var(--fs)*0.95);
-             padding:0 2px;line-height:1}
-  .axis-ctl button:hover{color:var(--fg)}
-  .axis-ctl button.on{color:var(--accent);font-weight:700}
-  /* 📌 is a full-color emoji glyph -- CSS `color` doesn't tint it like the
-     text-glyph axis-ctl buttons (⇅⏷✎), so on/off uses opacity + a chip
-     background instead, matching #searchPin's identical constraint. */
-  .pin-btn{opacity:.35}
-  .pin-btn:hover{opacity:.75}
-  .pin-btn.on{opacity:1;background:var(--hl);border-radius:3px}
+  /* Row-header identifiers in Data/Row mode (taxonomy strings like
+     "k__Bacteria|p__...|s__species") share a long common prefix and differ
+     only near the end -- truncating from the end (the default) makes most
+     rows look identical. Truncating from the start instead keeps the
+     actually-distinguishing tail visible. Standard CSS trick: flip the box
+     to rtl so text-overflow's "end" is the left edge, while unicode-bidi:
+     plaintext keeps the Latin text itself reading LTR. Scoped to Data/Row
+     mode only -- in Col mode .rh holds metadata *field names* (English
+     text), which read better with normal end-truncation. */
+  body.mode-data .rh,body.mode-row .rh{direction:rtl;text-align:left;unicode-bidi:plaintext}
   .pin-last{border-bottom:2px solid var(--accent)}
   #filterPopover,#ctxMenu,#viewsPopover,#confirmPopover{background:var(--panel-raised);border:1px solid var(--border);
              box-shadow:var(--shadow-md);border-radius:var(--radius-md)}
@@ -694,7 +686,8 @@ PAGE = """<!doctype html>
   #filterPopover.fp-checklist input.fp-search{width:100%}
   .fp-actions{display:flex;gap:4px}
   .fp-actions button{flex:1}
-  #ctxMenu{position:fixed;z-index:40;padding:4px;min-width:160px}
+  #ctxMenu{position:fixed;z-index:40;padding:4px;min-width:200px}
+  .ctx-sep{height:1px;background:var(--border);margin:4px 2px}
   .ctx-item{display:block;width:100%;text-align:left;background:none;border:none;color:var(--fg);
              padding:6px 10px;border-radius:5px;cursor:pointer;font-size:12.5px;white-space:nowrap;
              overflow:hidden;text-overflow:ellipsis;transition:background var(--dur) var(--ease)}
@@ -1824,13 +1817,12 @@ async function render(){
     h.className = 'cell hdr colhdr';
     h.title = label;
     h.dataset.c = c;
+    h.textContent = label;
     if(mode==='row'){
-      h.innerHTML = `<span class="hdr-label">${escapeHtml(label)}</span>${axisControlsHtml('observation', rowFields[c])}`;
-    } else {
-      h.textContent = label;
+      h.dataset.ctxAxis = 'observation';
+      h.dataset.ctxField = rowFields[c];
     }
     h.addEventListener('click', (e)=>{
-      if(e.target.closest('.axis-ctl')) return; // icon clicks handled separately below
       selR=null; selPinnedRaw=null; selPinnedField=null; selC=c;
       showSelected(label);
       applyHighlight();
@@ -1854,12 +1846,11 @@ async function render(){
     const isLast = pi === pinnedRaw.length - 1;
     const rh = document.createElement('div');
     rh.className = 'cell rh' + (isLast ? ' pin-last' : '');
-    rh.innerHTML = `<span class="hdr-label">${escapeHtml(label)}</span>` +
-      `<span class="axis-ctl"><button class="pin-btn on" data-raw="${rawIdx}" title="Unpin">📌</button></span>`;
+    rh.textContent = label;
     rh.title = label;
     rh.dataset.pinnedRaw = rawIdx;
+    rh.dataset.ctxPinRaw = rawIdx;
     rh.addEventListener('click', (e)=>{
-      if(e.target.closest('.axis-ctl')) return;
       selR=null; selC=null; selPinnedRaw=rawIdx; selPinnedField=null;
       showSelected(label);
       applyHighlight();
@@ -1906,22 +1897,21 @@ async function render(){
     rh.className = 'cell rh' + (isLast ? ' pin-last' : '');
     if(stripOnRows()){
       rh.classList.add('rh-stats');
-      rh.innerHTML = `<div class="stat-line rh-label">${escapeHtml(label)}</div>` + statCellHtml(pinnedFieldStats[pi]) +
-        `<span class="axis-ctl"><button class="pin-btn on" data-field="${escapeHtml(field)}" title="Unpin">📌</button></span>`;
+      rh.innerHTML = `<div class="stat-line rh-label">${escapeHtml(label)}</div>` + statCellHtml(pinnedFieldStats[pi]);
       wireStatOther(rh, pinnedFieldStats[pi], label);
     } else if(field===expandedPinnedField){
       rh.classList.add('rh-stats');
-      rh.innerHTML = `<div class="stat-line rh-label">${escapeHtml(label)}</div>` + statCellHtml(pinnedFieldExpandedStat) +
-        `<span class="axis-ctl"><button class="pin-btn on" data-field="${escapeHtml(field)}" title="Unpin">📌</button></span>`;
+      rh.innerHTML = `<div class="stat-line rh-label">${escapeHtml(label)}</div>` + statCellHtml(pinnedFieldExpandedStat);
       wireStatOther(rh, pinnedFieldExpandedStat, label);
     } else {
-      rh.innerHTML = `<span class="hdr-label">${escapeHtml(label)}</span>${axisControlsHtml('sample', field)}` +
-        `<span class="axis-ctl"><button class="pin-btn on" data-field="${escapeHtml(field)}" title="Unpin">📌</button></span>`;
+      rh.textContent = label;
+      rh.dataset.ctxAxis = 'sample';
+      rh.dataset.ctxField = field;
     }
     rh.title = label;
     rh.dataset.pinnedField = field;
+    rh.dataset.ctxPinField = field;
     rh.addEventListener('click', (e)=>{
-      if(e.target.closest('.axis-ctl')) return;
       selR=null; selC=null; selPinnedField=field; selPinnedRaw=null;
       showSelected(label);
       applyHighlight();
@@ -1958,16 +1948,17 @@ async function render(){
       wireStatOther(rh, fieldExpandedStat, label);
     } else if(mode==='col'){
       const field = colFieldAt(r);
-      rh.innerHTML = `<span class="hdr-label">${escapeHtml(label)}</span>${axisControlsHtml('sample', field)}` +
-        `<span class="axis-ctl"><button class="pin-btn" data-field="${escapeHtml(field)}" title="Pin to top">📌</button></span>`;
+      rh.textContent = label;
+      rh.dataset.ctxAxis = 'sample';
+      rh.dataset.ctxField = field;
+      rh.dataset.ctxPinField = field;
     } else {
-      rh.innerHTML = `<span class="hdr-label">${escapeHtml(label)}</span>` +
-        `<span class="axis-ctl"><button class="pin-btn" data-raw="${obsAt(r)}" title="Pin to top">📌</button></span>`;
+      rh.textContent = label;
+      rh.dataset.ctxPinRaw = obsAt(r);
     }
     rh.title = label;
     rh.dataset.r = r;
     rh.addEventListener('click', (e)=>{
-      if(e.target.closest('.axis-ctl')) return;
       selR=r; selC=null; selPinnedRaw=null; selPinnedField=null;
       showSelected(label);
       applyHighlight();
@@ -2104,17 +2095,35 @@ function colStatsFetch(j){
     : window.pywebview.api.col_summary(sampleAt(j));
 }
 
-function axisControlsHtml(axis, field){
-  const st = axisState[axis];
-  const arrow = st.sortField===field ? (st.sortDir===1 ? '▲' : st.sortDir===-1 ? '▼' : '⇅') : '⇅';
-  const sortOn = st.sortField===field && st.sortDir!==0;
-  const filterOn = st.filters.some(f=>f.field===field);
-  const display = fieldDisplay(axis, field);
-  return `<span class="axis-ctl">` +
-    `<button class="axis-sort${sortOn?' on':''}" data-axis="${axis}" data-field="${escapeHtml(field)}" title="Sort by ${escapeHtml(display)}">${arrow}</button>` +
-    `<button class="axis-filter${filterOn?' on':''}" data-axis="${axis}" data-field="${escapeHtml(field)}" title="Filter by ${escapeHtml(display)}">⏷</button>` +
-    `<button class="axis-edit" data-axis="${axis}" data-field="${escapeHtml(field)}" title="Rename or delete ${escapeHtml(display)}">✎</button>` +
-  `</span>`;
+// Sort/filter/rename/pin used to live as four always-visible icon buttons
+// crammed into every header cell -- decluttered per user request into a
+// single right-click menu instead (see the 'contextmenu' listener below).
+// Reads the ctxAxis/ctxField/ctxPinRaw/ctxPinField data attributes that
+// render() stamps onto header cells rather than baking markup per-cell.
+function headerContextItems(el){
+  const items = [];
+  const axis = el.dataset.ctxAxis, field = el.dataset.ctxField;
+  if(axis && field){
+    const st = axisState[axis];
+    const display = fieldDisplay(axis, field);
+    const sortOn = st.sortField===field && st.sortDir!==0;
+    const sortLabel = !sortOn ? `Sort by ${display} (ascending)`
+      : st.sortDir===1 ? `Sort by ${display} (descending)` : `Clear sort on ${display}`;
+    items.push({label: sortLabel, onClick: ()=>cycleSort(axis, field)});
+    const filterOn = st.filters.some(f=>f.field===field);
+    items.push({label: filterOn ? `Edit filter on ${display}…` : `Filter by ${display}…`,
+      onClick: ()=>openFilterInput(axis, field, el)});
+    items.push({label: `Rename or delete ${display}…`, onClick: ()=>openFieldPopover(axis, field, el)});
+  }
+  if(el.dataset.ctxPinRaw !== undefined){
+    const rawIdx = parseInt(el.dataset.ctxPinRaw, 10);
+    items.push({label: pinnedObs.has(rawIdx) ? 'Unpin' : 'Pin to top', onClick: ()=>togglePin(rawIdx)});
+  }
+  if(el.dataset.ctxPinField !== undefined){
+    const f = el.dataset.ctxPinField;
+    items.push({label: pinnedColFields.has(f) ? 'Unpin' : 'Pin to top', onClick: ()=>togglePinField(f)});
+  }
+  return items;
 }
 
 function cycleSort(axis, field){
@@ -2549,7 +2558,7 @@ function openFieldPopover(axis, field, anchorEl){
 
 document.addEventListener('click', (e)=>{
   const pop = document.getElementById('filterPopover');
-  if(pop && !pop.contains(e.target) && !e.target.closest('.axis-filter') && !e.target.closest('.axis-edit')) closeFilterPopover();
+  if(pop && !pop.contains(e.target) && !e.target.closest('.ctx-item')) closeFilterPopover();
   const viewsPop = document.getElementById('viewsPopover');
   if(viewsPop && !viewsPop.contains(e.target) && e.target!==viewsBtn) closeViewsPopover();
 });
@@ -2696,21 +2705,6 @@ async function switchToView(name){
 const viewsBtn = document.getElementById('viewsBtn');
 viewsBtn.onclick = ()=> openViewsPopover();
 
-document.getElementById('grid').addEventListener('click', (e)=>{
-  const sortBtn = e.target.closest('.axis-sort');
-  if(sortBtn){ e.stopPropagation(); cycleSort(sortBtn.dataset.axis, sortBtn.dataset.field); return; }
-  const filterBtn = e.target.closest('.axis-filter');
-  if(filterBtn){ e.stopPropagation(); openFilterInput(filterBtn.dataset.axis, filterBtn.dataset.field, filterBtn); return; }
-  const editBtn = e.target.closest('.axis-edit');
-  if(editBtn){ e.stopPropagation(); openFieldPopover(editBtn.dataset.axis, editBtn.dataset.field, editBtn); return; }
-  const pinBtn = e.target.closest('.pin-btn');
-  if(pinBtn){
-    e.stopPropagation();
-    if(pinBtn.dataset.field!==undefined) togglePinField(pinBtn.dataset.field);
-    else togglePin(parseInt(pinBtn.dataset.raw, 10));
-    return;
-  }
-});
 
 function togglePin(rawIdx){
   if(pinnedObs.has(rawIdx)) pinnedObs.delete(rawIdx); else pinnedObs.add(rawIdx);
@@ -2749,24 +2743,37 @@ function closeContextMenu(){
 // for real <a> navigations, not window.open() -- see Api.open_url's comment
 // for why the actual browser launch goes through Python instead.
 document.addEventListener('contextmenu', (e)=>{
+  const headerEl = e.target.closest('.rh, .hdr.colhdr');
+  const headerItems = headerEl ? headerContextItems(headerEl) : [];
+
   const sel = window.getSelection().toString().trim();
   const cellEl = e.target.closest('.cell, .wm-row, #cellBlock, #codeBlock, #selected');
   const fallback = cellEl ? (cellEl.value !== undefined ? cellEl.value : cellEl.textContent).trim() : '';
   const text = sel || fallback;
-  if(!text) return; // nothing relevant under the cursor -- let the native menu show
+  if(!headerItems.length && !text) return; // nothing relevant under the cursor -- let the native menu show
   e.preventDefault();
   closeContextMenu();
   const menu = document.createElement('div');
   menu.id = 'ctxMenu';
   menu.style.left = e.clientX + 'px';
   menu.style.top = e.clientY + 'px';
-  const short = text.length > 40 ? text.slice(0, 40) + '…' : text;
-  menu.innerHTML = `<button class="ctx-item">Search Google for "${escapeHtml(short)}"</button>`;
+  let html = headerItems.map((it, i)=>`<button class="ctx-item" data-hi="${i}">${escapeHtml(it.label)}</button>`).join('');
+  if(text){
+    if(headerItems.length) html += `<div class="ctx-sep"></div>`;
+    const short = text.length > 40 ? text.slice(0, 40) + '…' : text;
+    html += `<button class="ctx-item" data-search="1">Search Google for "${escapeHtml(short)}"</button>`;
+  }
+  menu.innerHTML = html;
   document.body.appendChild(menu);
-  menu.querySelector('.ctx-item').onclick = ()=>{
-    window.pywebview.api.open_url('https://www.google.com/search?q=' + encodeURIComponent(text));
-    closeContextMenu();
-  };
+  headerItems.forEach((it, i)=>{
+    menu.querySelector(`[data-hi="${i}"]`).onclick = ()=>{ closeContextMenu(); it.onClick(); };
+  });
+  if(text){
+    menu.querySelector('[data-search]').onclick = ()=>{
+      window.pywebview.api.open_url('https://www.google.com/search?q=' + encodeURIComponent(text));
+      closeContextMenu();
+    };
+  }
 });
 document.addEventListener('click', closeContextMenu);
 
