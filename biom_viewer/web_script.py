@@ -181,6 +181,24 @@ function computeFit(){
   }
 
   autoCols = Math.max(1, Math.floor(availW/COLW_TARGET));
+
+  // Leftover width goes to the row-header column, not to the value columns.
+  // Row metadata mode routinely shows two or three fields, and splitting the
+  // whole window between them gave 500px of blank cell to the word
+  // "Bacteria" while the taxonomy ids beside it were still being chopped
+  // down to "...aceae|g__Blautia|s__fragilis_2" inside a 240px header. The
+  // ids are the part you actually need to read. Only kicks in once the
+  // header is already at its cap (i.e. its labels genuinely don't fit) and
+  // never takes more than half the window, so wide tables are untouched.
+  // Skipped while a field row is expanded: statRowH() probes that cell at a
+  // hardcoded RHW_MAX width, so moving RHW out from under it would measure
+  // the summary's height against the wrong column width.
+  const shownCols = meta ? Math.min(autoCols, colsTotal()) : autoCols;
+  const surplus = availW - shownCols * COLW_TARGET;
+  if(surplus > 0 && RHW >= RHW_MAX && !anyFieldRowExpanded()){
+    RHW = Math.min(RHW + surplus, Math.round(mainRect.width * 0.5));
+    availW = mainRect.width - RHW - GAP;
+  }
 }
 
 let mode='data'; // 'data' | 'row' (observation metadata) | 'col' (sample metadata)
@@ -1197,11 +1215,16 @@ function execCommandCopy(text){
 // JSON. Falls back to `text` for calls (header clicks, status messages) that
 // have no separate raw value.
 let lastSelectedValue = '';
+// Set while a right-click is replaying an element's own click handler to
+// move the selection under the cursor (see the 'contextmenu' listener).
+// Left-clicking a cell deliberately copies it; opening a context menu must
+// not quietly overwrite whatever the user has on the clipboard.
+let suppressSelectionCopy = false;
 function showSelected(text, raw){
   lastSelectedValue = raw!==undefined ? raw : text;
   const inp=document.getElementById('selected');
   inp.value = text;
-  copySelected();
+  if(!suppressSelectionCopy) copySelected();
   inp.classList.add('flash');
   clearTimeout(showSelected._t);
   showSelected._t = setTimeout(()=>inp.classList.remove('flash'), 700);
@@ -1997,6 +2020,18 @@ function closeContextMenu(){
 // for real <a> navigations, not window.open() -- see Api.open_url's comment
 // for why the actual browser launch goes through Python instead.
 document.addEventListener('contextmenu', (e)=>{
+  // Right-click has to move the selection to what's under the cursor.
+  // Without this the menu acts on one row while the highlight and the
+  // readout bar still point at whatever was last left-clicked -- the UI
+  // actively pointing away from the thing about to be renamed or deleted.
+  // Replaying the element's own click handler is what gets every keying
+  // scheme (paged / pinned-raw / pinned-field) and every label format
+  // right, rather than a second copy of that logic here.
+  const gridTarget = e.target.closest('#grid .cell');
+  if(gridTarget){
+    suppressSelectionCopy = true;
+    try{ gridTarget.click(); } finally { suppressSelectionCopy = false; }
+  }
   const headerEl = e.target.closest('.rh, .hdr.colhdr');
   const headerItems = headerEl ? headerContextItems(headerEl) : [];
 
