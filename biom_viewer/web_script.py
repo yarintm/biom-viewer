@@ -1246,7 +1246,7 @@ function execCommandCopy(text){
 // what the expand button (⤢, ⌘⏎) shows full-size and pretty-printed if it's
 // JSON. Falls back to `text` for calls (header clicks, status messages) that
 // have no separate raw value.
-let lastSelectedValue = '';
+let lastSelectedValue = '', lastSelectedLabel = '';
 // Set while a right-click is replaying an element's own click handler to
 // move the selection under the cursor (see the 'contextmenu' listener).
 // Left-clicking a cell deliberately copies it; opening a context menu must
@@ -1254,6 +1254,10 @@ let lastSelectedValue = '';
 let suppressSelectionCopy = false;
 function showSelected(text, raw){
   lastSelectedValue = raw!==undefined ? raw : text;
+  // The expanded view is a modal that covers the grid, so by the time you
+  // are reading it the row and column it came from are behind a blur. It
+  // said "Cell content" and nothing else; now it says which cell.
+  lastSelectedLabel = raw!==undefined ? text.replace(/\s+=\s+[\s\S]*$/, '') : text;
   const inp=document.getElementById('selected');
   inp.value = text;
   if(!suppressSelectionCopy) copySelected();
@@ -1270,6 +1274,9 @@ function prettyPrintValue(v){
 }
 
 function openCellModal(){
+  const title = document.getElementById('cellTitle');
+  title.textContent = lastSelectedLabel || 'Cell content';
+  title.title = lastSelectedLabel;
   document.getElementById('cellBlock').textContent = prettyPrintValue(lastSelectedValue);
   document.getElementById('cellOverlay').classList.add('open');
 }

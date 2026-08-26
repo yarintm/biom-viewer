@@ -380,7 +380,16 @@ STYLE = """
              -webkit-user-select:text;user-select:text;cursor:auto}
   .wm-modal header{display:flex;align-items:center;justify-content:flex-end;gap:8px;
                      padding:12px 14px;border-bottom:1px solid var(--border)}
-  .wm-modal header h3{margin:0;font-size:14px;margin-right:auto}
+  /* min-width:0 so a taxonomy string in the title truncates instead of
+     shoving Copy and the close button off the edge of the dialog. */
+  .wm-modal header h3{margin:0;font-size:14px;margin-right:auto;min-width:0;
+             overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  /* This one is a row/column identity rather than a dialog name, so it is
+     set like the data it points at. */
+  /* Wraps rather than truncating: it reads "<row> | <column>", and
+     ellipsising the tail cut off the column id -- the half that says which
+     of 217 samples this is. The dialog has the width to just show both. */
+  #cellTitle{font:600 12px/1.4 ui-monospace,monospace;white-space:normal;overflow-wrap:anywhere;overflow:visible}
   .wm-modal .x{cursor:pointer;color:var(--dim);font-size:16px;line-height:1;background:none;border:none}
   .wm-modal .x:hover{color:var(--fg)}
   .wm-body{margin:0;padding:14px;font-family:ui-monospace,monospace;font-size:12px;
