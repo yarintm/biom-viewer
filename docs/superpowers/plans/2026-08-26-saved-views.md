@@ -1387,6 +1387,34 @@ const viewsBtn = document.getElementById('viewsBtn');
 viewsBtn.onclick = ()=> openViewsPopover();
 ```
 
+- [ ] **Step 3b: Make `viewStatesEqual` order-insensitive for pin sets**
+
+Added during Task 7's implementation (authorized directly by the controller, based on a finding from Task 5's code quality review — documented here after the fact for plan/code parity): `captureViewState()` and `viewStatePayload()` (both added in Task 5) build their `pinnedObs`/`pinnedColFields` arrays from `Set` iteration order (insertion order), so two states with identical pin *membership* but different insertion history (e.g. pin A then B, vs. unpin-and-repin A giving B-then-A) produce differently-ordered arrays and make `viewStatesEqual`'s `JSON.stringify` comparison false-negative. Task 5 left this inert (nothing called `viewStatesEqual` yet); Task 7's `switchToView` is the first real caller, so the bug becomes user-visible there (an unnecessary "discard current filters?" prompt) — fixed as part of this task instead of shipping it broken.
+
+`captureViewState()` — sort both arrays before returning; `pinnedObs` needs an explicit numeric comparator since default `.sort()` is lexicographic (would put `10` before `2`):
+
+```javascript
+function captureViewState(){
+  return {
+    mode,
+    axisState: JSON.parse(JSON.stringify(axisState)),
+    rowFields: rowFields.slice(),
+    colFields: colFields.slice(),
+    pinnedObs: [...pinnedObs].sort((a,b)=>a-b),
+    pinnedColFields: [...pinnedColFields].sort(),
+  };
+}
+```
+
+`viewStatePayload(v)` — same sorting applied when extracting the comparable subset from a saved view's payload:
+
+```javascript
+function viewStatePayload(v){
+  return {mode: v.mode, axisState: v.axisState, rowFields: v.rowFields, colFields: v.colFields,
+    pinnedObs: [...v.pinnedObs].sort((a,b)=>a-b), pinnedColFields: [...v.pinnedColFields].sort()};
+}
+```
+
 - [ ] **Step 4: Manually verify the full flow**
 
 Run `python3 scripts/dev_server.py <some-file.biom>`, open in browser:
