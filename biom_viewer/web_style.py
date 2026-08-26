@@ -73,11 +73,27 @@ STYLE = """
      without a floor this collapses to a fully invisible 0px at narrow
      window widths instead of truncating down to some readable minimum
      (verified in the live preview harness at the app's own min_size). */
-  #info #filename{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;letter-spacing:-.01em;min-width:60px}
-  .file-dir{color:var(--dim);font-weight:400}
-  .file-base{color:var(--fg);font-weight:700}
+  /* Only the directory half gives way. Truncating the label as one string
+     ate the basename first (the whole path is one run, so the ellipsis
+     lands at the end) and a narrow window was left showing "/Users/..." --
+     the document's own name, the one thing the title has to carry, gone.
+     The basename is flex:none so it survives to the last pixel; the dir
+     shrinks around it. */
+  #info #filename{display:flex;align-items:baseline;overflow:hidden;letter-spacing:-.01em;min-width:60px}
+  /* flex-shrink 100 vs 1: the directory gives up ~100px for every 1px the
+     basename does, so it is effectively gone before the name starts to
+     ellipsise, instead of both shrinking together and neither being
+     readable. */
+  .file-dir{color:var(--dim);font-weight:400;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:0 100 auto;min-width:0}
+  .file-base{color:var(--fg);font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:0 1 auto;min-width:0}
   #dims{flex-shrink:0;white-space:nowrap;margin-left:10px;color:var(--dim);font-size:11.5px;font-family:ui-monospace,monospace;
              background:var(--panel-bg);border:1px solid var(--border);border-radius:10px;padding:2px 8px}
+  /* Below this the top row can't hold the path, the dimensions pill, the
+     mode tag and the mode switcher at once, and flex was resolving it by
+     clipping the pills mid-glyph -- "60 x 24" showing as a lone "6". The
+     path and the mode controls are what you steer by; the pills are a
+     readout, and the mode tag only ever restates the highlighted button
+     two inches to its right. Both come back when the window widens. */
   #info #toolbar{display:flex;align-items:center;gap:10px;flex-shrink:0}
   #modeTag{display:none;white-space:nowrap;flex-shrink:0;font:700 10px/1 ui-monospace,monospace;padding:3px 7px;border-radius:10px;
            border:1px solid currentColor;letter-spacing:.03em;margin-left:8px}
@@ -404,4 +420,22 @@ STYLE = """
   .stat-top-row .fill{position:absolute;inset:0;background:var(--nz-bg);z-index:0}
   .stat-top-row .lbl,.stat-top-row .pct{position:relative;z-index:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .stat-top-row .pct{flex-shrink:0;font-family:ui-monospace,monospace}
+
+  /* Last in the sheet on purpose: these override plain id selectors of the
+     same specificity, and a media query adds none of its own -- placed
+     earlier they simply lose to whatever comes after. */
+  @media (max-width:820px){
+    /* Below this the top row can't hold the path, the dimensions pill, the
+       mode tag and the mode switcher at once, and flex was resolving it by
+       clipping the pills mid-glyph -- "60 x 24" showing as a lone "6". The
+       path and the mode controls are what you steer by; the pills are a
+       readout, and the mode tag only ever restates the highlighted button
+       two inches to its right. Both come back when the window widens. */
+    #dims,#modeTag{display:none !important}
+    /* The search field held a fixed 220px no matter how little was left,
+       so at the app's own minimum window size it squeezed the document
+       title down to a dozen characters to keep room it wasn't using. */
+    #searchBox{width:130px}
+    #searchResults{width:min(420px,90vw)}
+  }
 """
