@@ -413,3 +413,83 @@ def test_workspace_from_payload_handles_no_current():
 
     assert restored.current is None
     assert restored.views == []
+
+
+from biom_viewer.app import DatasetIdentity, WorkspaceStore
+
+
+def test_dataset_identity_uses_table_id_when_present():
+    table = make_table()
+    table.table_id = "my-table-id"
+
+    identity = DatasetIdentity.from_table(table)
+
+    assert str(identity) == "my-table-id"
+
+
+def test_dataset_identity_falls_back_to_fingerprint_when_table_id_missing():
+    table = make_table()
+    table.table_id = None
+
+    identity = DatasetIdentity.from_table(table)
+
+    assert str(identity) != ""
+    assert str(identity) != "None"
+
+
+def test_dataset_identity_fingerprint_is_stable_for_identical_tables():
+    table_a = make_table()
+    table_a.table_id = None
+    table_b = make_table()
+    table_b.table_id = None
+
+    assert str(DatasetIdentity.from_table(table_a)) == str(DatasetIdentity.from_table(table_b))
+
+
+def test_dataset_identity_fingerprint_differs_for_different_shapes():
+    small = make_table()
+    small.table_id = None
+    data = np.array([[0, 1], [2, 0]])
+    different_shape = biom.Table(data, ["obsA", "obsB"], ["s1", "s2"])
+    different_shape.table_id = None
+
+    assert str(DatasetIdentity.from_table(small)) != str(DatasetIdentity.from_table(different_shape))
+
+
+def test_workspace_store_round_trips_save_and_load(tmp_path):
+    store = WorkspaceStore(tmp_path / "state.json")
+    identity = DatasetIdentity("dataset-1")
+    workspace = Workspace(current=make_view_state(), views=[SavedView(name="A", state=make_view_state(), saved_at="t")])
+
+    store.save_workspace(identity, workspace)
+    loaded = store.load_workspace(identity)
+
+    assert loaded == workspace
+
+
+def test_workspace_store_load_missing_file_returns_empty_workspace(tmp_path):
+    store = WorkspaceStore(tmp_path / "does-not-exist.json")
+
+    loaded = store.load_workspace(DatasetIdentity("dataset-1"))
+
+    assert loaded == Workspace.empty()
+
+
+def test_workspace_store_load_corrupt_file_returns_empty_workspace(tmp_path):
+    store_path = tmp_path / "state.json"
+    store_path.write_text("not valid json{{{")
+    store = WorkspaceStore(store_path)
+
+    loaded = store.load_workspace(DatasetIdentity("dataset-1"))
+
+    assert loaded == Workspace.empty()
+
+
+def test_workspace_store_keeps_other_identities_untouched(tmp_path):
+    store = WorkspaceStore(tmp_path / "state.json")
+    store.save_workspace(DatasetIdentity("dataset-1"), Workspace(current=make_view_state("data"), views=[]))
+
+    store.save_workspace(DatasetIdentity("dataset-2"), Workspace(current=make_view_state("row"), views=[]))
+
+    assert store.load_workspace(DatasetIdentity("dataset-1")).current.mode == "data"
+    assert store.load_workspace(DatasetIdentity("dataset-2")).current.mode == "row"

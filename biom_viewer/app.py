@@ -364,6 +364,70 @@ class Workspace:
         return next((v for v in self.views if v.name == name), None)
 
 
+def _id_edges(ids, count=5):
+    return list(ids[:count]) + list(ids[-count:])
+
+
+class DatasetIdentity:
+    """The table_id-or-fingerprint key a Workspace is stored under."""
+
+    def __init__(self, key: str) -> None:
+        self.key = key
+
+    @classmethod
+    def from_table(cls, table) -> "DatasetIdentity":
+        if table.table_id:
+            return cls(table.table_id)
+        return cls(cls._fingerprint(table))
+
+    @staticmethod
+    def _fingerprint(table) -> str:
+        observation_edges = _id_edges(table.ids(axis="observation"))
+        sample_edges = _id_edges(table.ids(axis="sample"))
+        raw = f"{table.shape}|{observation_edges}|{sample_edges}"
+        return hashlib.sha1(raw.encode("utf-8")).hexdigest()
+
+    def __str__(self) -> str:
+        return self.key
+
+
+class WorkspaceStore:
+    """Owns all read/write access to the app-support JSON file. Nothing else touches it."""
+
+    def __init__(self, store_path: Path) -> None:
+        self._store_path = store_path
+        self._lock = threading.Lock()
+
+    @classmethod
+    def default(cls) -> "WorkspaceStore":
+        support_dir = Path.home() / "Library" / "Application Support" / "BiomViewer"
+        return cls(support_dir / "state.json")
+
+    def load_workspace(self, identity: DatasetIdentity) -> Workspace:
+        document = self._read_document()
+        payload = document.get(str(identity))
+        return Workspace.from_payload(payload) if payload else Workspace.empty()
+
+    def save_workspace(self, identity: DatasetIdentity, workspace: Workspace) -> None:
+        with self._lock:
+            document = self._read_document()
+            document[str(identity)] = workspace.to_payload()
+            self._write_document(document)
+
+    def _read_document(self) -> dict:
+        try:
+            return json.loads(self._store_path.read_text())
+        except (OSError, ValueError):
+            return {}
+
+    def _write_document(self, document: dict) -> None:
+        try:
+            self._store_path.parent.mkdir(parents=True, exist_ok=True)
+            self._store_path.write_text(json.dumps(document))
+        except OSError:
+            pass
+
+
 class Api:
     """Exposed to the frontend as window.pywebview.api.* — no HTTP server involved.
 
