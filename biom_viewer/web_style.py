@@ -233,12 +233,12 @@ STYLE = """
   .cell:not(.rh):not(.colhdr):not(.stat-cell).hl-row,.cell:not(.rh):not(.colhdr):not(.stat-cell).hl-col{background:var(--hl) !important}
   /* A plain click used to paint THREE equally-weighted 2px outline boxes
      (the cell, its row header, its column header) -- competing for
-     attention instead of showing one clear focal point. Headers now only
-     go bold, keeping their own orange/row-meta or blue/col-meta identity
-     background intact, so .hl-cell's outline is the only "this is the
-     exact selection" signal left; bold text on the headers is just
-     "...and this is the row/column it's in" -- present but quieter. */
-  .rh.hl-row,.colhdr.hl-col{font-weight:700}
+     attention instead of showing one clear focal point, and a bolded-text
+     variant of that same idea read as distracting too (per feedback on a
+     field-summary header going bold on selection). Headers now get no
+     extra treatment at all: .hl-cell's outline on the actual cell is the
+     only "this is the exact selection" signal, and the .hl-row/.hl-col
+     tint on the rest of that row/column is the only supporting context. */
   /* When the column stats strip is showing, .colhdr (field/sample label)
      and the .stat-cell directly below it are two separate grid cells that
      read as one merged header block -- so their shared border must not
