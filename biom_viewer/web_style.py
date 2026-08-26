@@ -190,7 +190,13 @@ STYLE = """
   #main{flex:1;display:flex;flex-direction:column;overflow:hidden}
   #colNav{display:flex;align-items:center;justify-content:center;gap:10px;padding-bottom:8px}
   #colNav span{color:var(--dim);font-size:11.5px}
-  #rowNav span.range-filtered,#colNav span.range-filtered{color:var(--danger);font-weight:700}
+  /* "58 of 60 rows" is a state you asked for, not a fault -- but it was
+     painted in --danger, the same red as Delete and Discard, so a working
+     filter announced itself in the app's error colour. Each range takes its
+     own axis colour instead, which is the language the headers already use
+     for "this is the row axis" / "this is the column axis". */
+  #rowNav span.range-filtered{color:var(--row-meta);font-weight:700}
+  #colNav span.range-filtered{color:var(--col-meta);font-weight:700}
   #grid{display:grid;overflow:hidden;flex-shrink:0;align-self:flex-start;border-radius:var(--radius-sm);box-shadow:var(--shadow-sm)}
   .cell{border:1px solid var(--cell-border);padding:3px 6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--fs);transition:background .1s var(--ease)}
   .hdr{background:var(--hdr-bg);color:var(--hdr-fg)}
@@ -215,7 +221,11 @@ STYLE = """
      holds metadata *field names* (English text), which read better with
      normal end-truncation. */
   body.mode-data .rh,body.mode-row .rh{direction:rtl;text-align:left}
-  .pin-last{border-bottom:2px solid var(--accent)}
+  /* A frozen-pane divider is structure, not state -- it was drawn in the
+     accent green that everywhere else means "selected", so the pinned block
+     read as though it were highlighted. Excel draws this line in plain
+     window chrome; --dim is this app's equivalent. */
+  .pin-last{border-bottom:2px solid var(--dim)}
   #filterPopover,#ctxMenu,#viewsPopover,#confirmPopover{background:var(--panel-raised);border:1px solid var(--border);
              box-shadow:var(--shadow-md);border-radius:var(--radius-md)}
   #filterPopover{position:fixed;z-index:30;padding:7px;display:flex;gap:4px;align-items:center}
