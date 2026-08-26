@@ -1098,6 +1098,48 @@ function restoreState(snap){
   render();
   renderAxisChips();
 }
+// A saved view is a superset of the undo snapshot above -- it also carries
+// mode and both pin sets, which snapshotState()/restoreState() deliberately
+// exclude from undo history (see pinnedObs's own comment). Two different
+// snapshot shapes for two different purposes, not one generalized one.
+function captureViewState(){
+  return {
+    mode,
+    axisState: JSON.parse(JSON.stringify(axisState)),
+    rowFields: rowFields.slice(),
+    colFields: colFields.slice(),
+    pinnedObs: [...pinnedObs],
+    pinnedColFields: [...pinnedColFields],
+  };
+}
+
+// Only mutates state -- callers decide when to render(), so a caller that's
+// about to do other work (reset a page, close a popover) isn't forced into
+// two renders for one logical change.
+function applyViewState(vs){
+  setMode(vs.mode);
+  axisState = JSON.parse(JSON.stringify(vs.axisState));
+  rowFields = vs.rowFields.slice();
+  colFields = vs.colFields.slice();
+  pinnedObs = new Set(vs.pinnedObs);
+  pinnedColFields = new Set(vs.pinnedColFields);
+  recomputeVisible('observation');
+  recomputeVisible('sample');
+  rowPage=0; colPage=0;
+}
+
+// Payloads from the saved-views list carry extra name/savedAt keys a plain
+// captureViewState() snapshot doesn't -- trim to the comparable subset before
+// any JSON.stringify equality check, or every comparison would false-negative.
+function viewStatePayload(v){
+  return {mode: v.mode, axisState: v.axisState, rowFields: v.rowFields, colFields: v.colFields,
+    pinnedObs: v.pinnedObs, pinnedColFields: v.pinnedColFields};
+}
+
+function viewStatesEqual(a, b){
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
 function undo(){
   if(!historyPast.length) return;
   historyFuture.push(snapshotState());
@@ -1181,6 +1223,17 @@ function fieldUnion(metaArr){
   return out;
 }
 
+let savedViews = [];
+let lastAppliedViewName = null;
+let lastLoadedViewState = null;
+
+async function loadWorkspace(){
+  const workspace = await window.pywebview.api.load_workspace();
+  savedViews = workspace.views;
+  if(workspace.current) applyViewState(workspace.current);
+  lastLoadedViewState = captureViewState();
+}
+
 async function loadMeta(){
   try{
     meta = await window.pywebview.api.meta();
@@ -1188,6 +1241,7 @@ async function loadMeta(){
     colFields = fieldUnion(meta.col_metadata);
     document.getElementById('filename').textContent =
       `${meta.filename}  —  ${meta.rows} rows x ${meta.cols} cols`;
+    await loadWorkspace();
     buildSearchIndex();
     render();
     renderAxisChips();
