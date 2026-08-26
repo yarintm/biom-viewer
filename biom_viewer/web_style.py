@@ -19,6 +19,7 @@ STYLE = """
     --border:light-dark(#e2e2e0,#38383c); --input-bg:light-dark(#fff,#1e1e21);
     --input-border:light-dark(#d3d3d0,#47474c);
     --cell-border:light-dark(#e6e6e4,#2c2c30); --hdr-bg:light-dark(#eeeeec,#242427);
+    --hdr-bg-sel:light-dark(#dcdcd8,#34343a);
     --hdr-fg:light-dark(#3a3a3d,#b8b8bd);
     --nz-bg:light-dark(#c9ecd9,#1f4636); --z-fg:light-dark(#86868b,#7c7c82);
     /* Search matches used to be painted in --nz-bg, i.e. the exact green
@@ -38,8 +39,21 @@ STYLE = """
     --shadow-md:light-dark(0 8px 24px rgba(0,0,0,.12),0 8px 28px rgba(0,0,0,.55));
     --shadow-lg:light-dark(0 20px 48px rgba(0,0,0,.18),0 20px 56px rgba(0,0,0,.6));
     --ease:cubic-bezier(.2,.8,.2,1); --dur:.14s;
-    --row-meta:light-dark(#b3590a,#f0b578); --row-meta-bg:light-dark(#f7d3a2,#4a3216);
-    --col-meta:light-dark(#0d4fb0,#8fc0ff); --col-meta-bg:light-dark(#bcdaff,#1e3455);
+    /* The light tints used to be far more saturated than their dark
+       counterparts -- dark's #4a3216/#1e3455 sit a small step off a #19191b
+       background, while light's #f7d3a2/#bcdaff were a big chromatic jump
+       off #f7f7f5, so the same design read as restrained in dark mode and as
+       a wall of peach and blue in light mode. Matched to the dark side's
+       restraint, which also fixed a real contrast failure: #b3590a on
+       #f7d3a2 measured 3.40:1, under the 4.5:1 minimum for text this size.
+       #8a4408 on #fbe6cd is 5.9:1; the column pair is 6.3:1. */
+    --row-meta:light-dark(#8a4408,#f0b578); --row-meta-bg:light-dark(#fbe6cd,#4a3216);
+    --col-meta:light-dark(#0d4fb0,#8fc0ff); --col-meta-bg:light-dark(#dcebff,#1e3455);
+    /* One step deeper than the resting tint, for "your selection is in this
+       row/column". Text contrast holds: 5.1:1 on the row pair, 5.4:1 on the
+       column pair. */
+    --row-meta-bg-sel:light-dark(#f5d3a8,#6b4a20);
+    --col-meta-bg-sel:light-dark(#c4dcff,#2e4d7d);
     --danger:light-dark(#c3392b,#ff7a70);
   }
   [data-theme="light"]{ color-scheme: light }
@@ -266,29 +280,52 @@ STYLE = """
      !important, so the longer :not() chain there would otherwise win. */
   .cell:not(.rh):not(.colhdr):not(.stat-cell).cell-expanded-row.hl-row,
   .cell:not(.rh):not(.colhdr):not(.stat-cell).cell-expanded-row.hl-col{background:var(--hl-soft) !important}
-  /* A plain click used to paint THREE equally-weighted 2px outline boxes
-     (the cell, its row header, its column header) -- competing for
-     attention instead of showing one clear focal point, and a bolded-text
-     variant of that same idea read as distracting too (per feedback on a
-     field-summary header going bold on selection). Headers now get no
-     extra treatment at all: .hl-cell's outline on the actual cell is the
-     only "this is the exact selection" signal, and the .hl-row/.hl-col
-     tint on the rest of that row/column is the only supporting context. */
-  /* When the column stats strip is showing, .colhdr (field/sample label)
-     and the .stat-cell directly below it are two separate grid cells that
-     read as one merged header block -- so their shared border must not
-     double up into two stacked boxes. colhdr keeps top/left/right only,
-     stat-cell keeps bottom/left/right only, and the seam's native cell
-     border is hidden so nothing shows between them. */
-  #grid.col-stats .colhdr.hl-col{box-shadow:inset 0 2px 0 var(--sel-outline),inset 2px 0 0 var(--sel-outline),inset -2px 0 0 var(--sel-outline)}
-  #grid.col-stats .stat-cell.hl-col{box-shadow:inset 0 -2px 0 var(--sel-outline),inset 2px 0 0 var(--sel-outline),inset -2px 0 0 var(--sel-outline);border-top-color:transparent}
+  /* Which row and column you are in is exactly what a header highlight is
+     for in a 10,000-row grid -- but every previous attempt at it competed
+     with the cell's own marker instead of supporting it. A 2px accent box
+     on each header painted three equally-weighted outlines for one click,
+     and swapping the boxes for bold text just moved the distraction into
+     the type. Both were the *same* signal repeated three times.
+     Headers now step their own resting tint one shade deeper -- the Excel
+     idiom. It reads instantly, changes one property, and can't compete for
+     focus with the accent outline because it isn't the same kind of mark.
+     .hl-cell's outline stays the single "this exact cell" indicator. */
+  /* Each axis takes the deeper shade of whatever tint it already wears in
+     this mode -- the orange/blue axis tints where the header *is* the
+     observation or sample axis, the neutral header grey where it is a list
+     of metadata field names (col mode's rows, row mode's columns). Picking
+     the deeper shade of the wrong palette would assert an axis identity the
+     header doesn't have. */
+  .rh.hl-row,.colhdr.hl-col{background:var(--hdr-bg-sel) !important}
+  body.mode-row .rh.hl-row,body.mode-data .rh.hl-row{background:var(--row-meta-bg-sel) !important}
+  body.mode-col .colhdr.hl-col,body.mode-data .colhdr.hl-col{background:var(--col-meta-bg-sel) !important}
+  /* A stats cell is a summary panel that happens to sit in the header slot,
+     not an axis label -- it keeps its panel background and lets the label
+     bar alone carry the selection. .rh-label paints its own opaque
+     background over the parent (negative margins stretch it edge to edge),
+     so the tint has to be repeated on it either way. */
+  .rh-stats.hl-row{background:var(--panel-bg) !important}
+  .rh-stats.hl-row .rh-label{background:var(--hdr-bg-sel)}
+  body.mode-row .rh-stats.hl-row .rh-label,body.mode-data .rh-stats.hl-row .rh-label{background:var(--row-meta-bg-sel)}
+  /* When the column stats strip is showing, .colhdr and the .stat-cell
+     directly below it read as one merged header block, so they take the
+     tint together and the seam between them is hidden. */
+  #grid.col-stats .stat-cell.hl-col{background:var(--col-meta-bg-sel);border-top-color:transparent}
   .hl-cell{outline:2px solid var(--sel-outline);outline-offset:-2px;position:relative;z-index:1}
   /* row axis (observation ids, leftmost column) orange; col axis (sample ids,
      top row) blue — in data mode both are on screen at once */
-  body.mode-row .rh,body.mode-data .rh{background:var(--row-meta-bg);color:var(--row-meta);border-color:var(--row-meta);font-weight:700}
-  body.mode-row .rh:not(.hl-row),body.mode-data .rh:not(.hl-row){box-shadow:inset 3px 0 0 var(--row-meta)}
-  body.mode-col .hdr.colhdr,body.mode-data .hdr.colhdr{background:var(--col-meta-bg);color:var(--col-meta);border-color:var(--col-meta);font-weight:700}
-  body.mode-col .hdr.colhdr:not(.hl-col),body.mode-data .hdr.colhdr:not(.hl-col){box-shadow:inset 0 -3px 0 var(--col-meta)}
+  /* Border stays the neutral cell border rather than the axis colour: a
+     coloured 1px box on all four sides of every header cell drew the axis
+     as a stack of outlined boxes. The tinted fill plus the 3px inset bar
+     below already say "this is the row axis" without the chain of frames. */
+  body.mode-row .rh,body.mode-data .rh{background:var(--row-meta-bg);color:var(--row-meta);font-weight:700}
+  /* The :not(.hl-row) guard here was only ever protecting against the
+     selection outline, which was also a box-shadow and would have replaced
+     this bar wholesale. Selection is a background change now, so the axis
+     bar can stay put -- it used to blink out of the one row you clicked. */
+  body.mode-row .rh,body.mode-data .rh{box-shadow:inset 3px 0 0 var(--row-meta)}
+  body.mode-col .hdr.colhdr,body.mode-data .hdr.colhdr{background:var(--col-meta-bg);color:var(--col-meta);font-weight:700}
+  body.mode-col .hdr.colhdr,body.mode-data .hdr.colhdr{box-shadow:inset 0 -3px 0 var(--col-meta)}
   #replaceModal{width:420px;border-radius:var(--radius-lg)}
   #replaceModal header{justify-content:space-between}
   #replaceModal header h3{margin-right:0}
