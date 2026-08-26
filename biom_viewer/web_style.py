@@ -22,6 +22,11 @@ STYLE = """
     --hdr-fg:light-dark(#3a3a3d,#b8b8bd);
     --nz-bg:light-dark(#c9ecd9,#1f4636); --z-fg:light-dark(#86868b,#7c7c82);
     --hl:light-dark(#d7f2e3,#26493a); --sel-outline:var(--accent);
+    /* Same tint at roughly a third of the strength, for the one place a
+       selection has to paint an unusually large area (see
+       .cell-expanded-row) -- perceived colour intensity scales with area,
+       so a tint tuned for a 20px row reads as a solid block at 130px. */
+    --hl-soft:light-dark(#eef9f3,#1c3529);
     --fs:11px;
     --radius-sm:6px; --radius-md:8px; --radius-lg:12px;
     --shadow-sm:light-dark(0 1px 2px rgba(0,0,0,.06),0 1px 2px rgba(0,0,0,.4));
@@ -215,6 +220,11 @@ STYLE = """
   .views-row:hover{background:var(--hl)}
   .views-row.active{background:var(--hl);font-weight:700}
   .views-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}
+  /* The base state isn't a saved view -- it can't be renamed or deleted and
+     it's always present -- so it sits above a rule as a separate group
+     rather than pretending to be the first item in the saved list. */
+  .views-row-base{border-bottom:1px solid var(--border);border-radius:5px 5px 0 0;margin-bottom:2px;padding-bottom:6px}
+  .views-base-hint{color:var(--dim);font-size:10.5px;flex:none}
   .views-x{background:none;border:none;color:var(--dim);cursor:pointer;font-size:10px;padding:0;line-height:1}
   .views-x:hover{color:var(--danger)}
   .views-save{display:flex;gap:4px;border-top:1px solid var(--border);padding-top:6px}
@@ -231,6 +241,10 @@ STYLE = """
   .mv{color:var(--fg)}
   .mv-empty{color:var(--z-fg);font-style:italic}
   .cell:not(.rh):not(.colhdr):not(.stat-cell).hl-row,.cell:not(.rh):not(.colhdr):not(.stat-cell).hl-col{background:var(--hl) !important}
+  /* Must out-specify the rule above, not just follow it -- both are
+     !important, so the longer :not() chain there would otherwise win. */
+  .cell:not(.rh):not(.colhdr):not(.stat-cell).cell-expanded-row.hl-row,
+  .cell:not(.rh):not(.colhdr):not(.stat-cell).cell-expanded-row.hl-col{background:var(--hl-soft) !important}
   /* A plain click used to paint THREE equally-weighted 2px outline boxes
      (the cell, its row header, its column header) -- competing for
      attention instead of showing one clear focal point, and a bolded-text

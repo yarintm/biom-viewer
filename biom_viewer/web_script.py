@@ -1136,6 +1136,13 @@ async function render(){
           applyHighlight();
         });
       }
+      // Data cells beside an expanded field summary are ~4x the normal row
+      // height purely to make room for the summary next to them -- nothing
+      // extra to show, just one value stranded at the top of a tall box.
+      // At that size the ordinary selection tint stops reading as "this row
+      // is selected" and turns into a solid slab of colour dominating the
+      // screen, so .cell-expanded-row dials it back.
+      if(r===fieldExpandedIdx) cell.classList.add('cell-expanded-row');
       grid.appendChild(cell);
     }
   }
@@ -1472,6 +1479,15 @@ function updateViewsBtnLabel(){
 // One undo step for the whole chips row -- individual chip removers each
 // call recordHistory() per action, but a bulk clear should collapse to a
 // single ctrl-Z, not one undo per chip.
+// "Nothing applied" -- the state clearAllChips() resets to. Used to tell
+// whether the Views list's "All data" row is the one currently in effect.
+function isBaseState(){
+  const empty = st => !st.sortField && !st.filters.length && !st.replacements.length
+    && !Object.keys(st.renames).length && !st.deletedFields.length;
+  return empty(axisState.observation) && empty(axisState.sample)
+    && !pinnedObs.size && !pinnedColFields.size;
+}
+
 function clearAllChips(){
   recordHistory();
   axisState.observation = { sortField: null, sortDir: 0, filters: [], replacements: [], renames: {}, deletedFields: [] };
@@ -1781,9 +1797,20 @@ function openViewsPopover(){
   const rect = viewsBtn.getBoundingClientRect();
   pop.style.left = rect.left + 'px';
   pop.style.top = (rect.bottom + 4) + 'px';
-  const rows = savedViews.length
+  // "No view" has to be selectable, not just an implicit state you fall
+  // into: without it the list is a one-way door -- you can enter a view but
+  // there's no listed way back to the unfiltered table, and the only escape
+  // (the "Clear all" chip) lives somewhere else entirely and doesn't read as
+  // being about views at all. As a row at the top of the same list, the
+  // whole thing becomes an honest single-select of "which state am I in",
+  // base state included.
+  const baseActive = (!lastAppliedViewName && isBaseState()) ? ' active' : '';
+  const baseRow = `<div class="views-row views-row-base${baseActive}">` +
+    `<span class="views-name">All data</span>` +
+    `<span class="views-base-hint">no filters</span></div>`;
+  const rows = baseRow + (savedViews.length
     ? savedViews.map(viewRowHtml).join('')
-    : `<div class="views-empty">No saved views yet</div>`;
+    : `<div class="views-empty">No saved views yet</div>`);
   const activeView = lastAppliedViewName ? savedViews.find(v => v.name===lastAppliedViewName) : null;
   const dirty = !!activeView && !viewStatesEqual(captureViewState(), viewStatePayload(activeView));
   const updateBanner = dirty
@@ -1807,7 +1834,12 @@ function openViewsPopover(){
 }
 
 function wireViewsPopover(pop){
-  pop.querySelectorAll('.views-row').forEach(row=>{
+  pop.querySelector('.views-row-base').addEventListener('click', ()=>{
+    closeViewsPopover();
+    lastAppliedViewName = null;
+    clearAllChips();
+  });
+  pop.querySelectorAll('.views-row:not(.views-row-base)').forEach(row=>{
     const name = row.dataset.name;
     row.querySelector('.views-name').addEventListener('click', ()=> switchToView(name));
     row.querySelector('.views-name').addEventListener('dblclick', (e)=>{ e.stopPropagation(); startRenameView(row, name); });
