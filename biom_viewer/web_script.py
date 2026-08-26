@@ -395,8 +395,16 @@ async function loadMeta(){
     meta = await window.pywebview.api.meta();
     rowFields = fieldUnion(meta.row_metadata);
     colFields = fieldUnion(meta.col_metadata);
-    document.getElementById('filename').textContent =
-      `${meta.filename}  —  ${meta.rows} rows x ${meta.cols} cols`;
+    // Split into the directory (de-emphasized -- context, not the point)
+    // and the basename (the actual document identity, kept prominent) --
+    // showing the whole absolute path at equal weight read as an
+    // undifferentiated text dump rather than a designed label.
+    const slash = meta.filename.lastIndexOf('/');
+    const dir = slash>=0 ? meta.filename.slice(0, slash+1) : '';
+    const base = slash>=0 ? meta.filename.slice(slash+1) : meta.filename;
+    document.getElementById('filename').innerHTML =
+      `<span class="file-dir">${escapeHtml(dir)}</span><span class="file-base">${escapeHtml(base)}</span>`;
+    document.getElementById('dims').textContent = `${meta.rows.toLocaleString()} × ${meta.cols.toLocaleString()}`;
     await loadWorkspace();
     buildSearchIndex();
     render();
@@ -1413,7 +1421,7 @@ function updateViewsBtnLabel(){
   if(!lastAppliedViewName){
     btn.textContent = 'Views ▾';
     btn.title = 'Saved views';
-    btn.classList.remove('views-active', 'views-dirty');
+    btn.classList.remove('views-dirty');
     return;
   }
   const view = savedViews.find(v => v.name===lastAppliedViewName);
@@ -1421,7 +1429,6 @@ function updateViewsBtnLabel(){
   btn.innerHTML = `<span class="views-current-name">${escapeHtml(lastAppliedViewName)}</span>` +
     (dirty ? `<span class="views-dirty-dot" title="Unsaved changes -- open Views to update">●</span>` : '') + ` ▾`;
   btn.title = dirty ? `${lastAppliedViewName} (unsaved changes -- open Views to update)` : lastAppliedViewName;
-  btn.classList.add('views-active');
   btn.classList.toggle('views-dirty', dirty);
 }
 
@@ -1743,14 +1750,23 @@ function openViewsPopover(){
   const activeView = lastAppliedViewName ? savedViews.find(v => v.name===lastAppliedViewName) : null;
   const dirty = !!activeView && !viewStatesEqual(captureViewState(), viewStatePayload(activeView));
   const updateBanner = dirty
-    ? `<button class="views-update-btn">● Update "${escapeHtml(lastAppliedViewName)}" with current changes</button>`
+    ? `<div class="views-dirty-banner">` +
+        `<div class="views-dirty-msg">● "${escapeHtml(lastAppliedViewName)}" has unsaved changes</div>` +
+        `<div class="views-dirty-actions">` +
+          `<button class="views-update-btn">Update</button>` +
+          `<button class="views-revert-btn">Revert</button>` +
+        `</div>` +
+      `</div>`
     : '';
   pop.innerHTML = updateBanner + `<div class="views-list">${rows}</div>` +
     `<div class="views-save"><input class="views-save-input" type="text" placeholder="Save current as…">` +
     `<button class="views-save-btn">Save</button></div>`;
   document.body.appendChild(pop);
   wireViewsPopover(pop);
-  if(dirty) pop.querySelector('.views-update-btn').onclick = ()=> saveCurrentAsView(lastAppliedViewName);
+  if(dirty){
+    pop.querySelector('.views-update-btn').onclick = ()=> saveCurrentAsView(lastAppliedViewName);
+    pop.querySelector('.views-revert-btn').onclick = ()=> applyView(activeView, lastAppliedViewName);
+  }
 }
 
 function wireViewsPopover(pop){

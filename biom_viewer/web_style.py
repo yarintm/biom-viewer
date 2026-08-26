@@ -44,7 +44,11 @@ STYLE = """
         transition:border-top-color var(--dur) var(--ease)}
   body.mode-row #info{border-top-color:var(--row-meta)}
   body.mode-col #info{border-top-color:var(--col-meta)}
-  #info #filename{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600;letter-spacing:-.01em}
+  #info #filename{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;letter-spacing:-.01em}
+  .file-dir{color:var(--dim);font-weight:400}
+  .file-base{color:var(--fg);font-weight:700}
+  #dims{flex-shrink:0;margin-left:10px;color:var(--dim);font-size:11.5px;font-family:ui-monospace,monospace;
+             background:var(--panel-bg);border:1px solid var(--border);border-radius:10px;padding:2px 8px}
   #info #toolbar{display:flex;align-items:center;gap:10px;flex-shrink:0}
   #modeTag{display:none;font:700 10px/1 ui-monospace,monospace;padding:3px 7px;border-radius:10px;
            border:1px solid currentColor;letter-spacing:.03em;margin-left:8px}
@@ -105,13 +109,20 @@ STYLE = """
   .views-current-name{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
              max-width:150px;display:inline-block;vertical-align:bottom}
   .views-dirty-dot{color:var(--row-meta);font-size:8px;margin:0 1px;vertical-align:middle}
-  #viewsBtn.views-active{border-color:var(--accent);background:var(--hl)}
-  #viewsBtn.views-active.views-dirty{border-color:var(--row-meta);background:var(--row-meta-bg)}
-  .views-update-btn{display:block;width:100%;box-sizing:border-box;text-align:left;
-             background:var(--row-meta-bg);color:var(--row-meta);border:1px solid var(--row-meta);
-             border-radius:5px;padding:6px 8px;font-size:12px;font-weight:600;cursor:pointer;
-             margin-bottom:6px;transition:filter var(--dur) var(--ease)}
-  .views-update-btn:hover{filter:brightness(0.95)}
+  /* Deliberately no color for the plain "a view is active" state -- the
+     name in the button already says that. Color is reserved for the one
+     state that needs it (unsaved changes), so it isn't fighting the green
+     used elsewhere (chips, selection, accent) for attention. */
+  #viewsBtn.views-dirty{border-color:var(--row-meta);background:var(--row-meta-bg)}
+  .views-dirty-banner{background:var(--row-meta-bg);border:1px solid var(--row-meta);border-radius:6px;
+             padding:7px 8px;margin-bottom:6px}
+  .views-dirty-msg{color:var(--row-meta);font-size:11.5px;font-weight:600;margin-bottom:6px}
+  .views-dirty-actions{display:flex;gap:4px}
+  .views-dirty-actions button{flex:1;border-radius:5px;padding:4px 0;font-size:12px;cursor:pointer;
+             transition:filter var(--dur) var(--ease)}
+  .views-update-btn{background:var(--row-meta);color:var(--bg);border:1px solid var(--row-meta);font-weight:600}
+  .views-revert-btn{background:none;color:var(--row-meta);border:1px solid var(--row-meta)}
+  .views-dirty-actions button:hover{filter:brightness(0.95)}
   #body{display:flex;flex:1;min-height:0;padding:0 14px 10px}
   #rowNav{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;padding-right:10px}
   #rowNav span{writing-mode:vertical-rl;color:var(--dim);white-space:nowrap;font-size:11.5px}

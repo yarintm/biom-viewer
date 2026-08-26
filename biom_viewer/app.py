@@ -564,6 +564,7 @@ PAGE = """<!doctype html>
 <div id="info">
   <span style="display:flex;align-items:center;overflow:hidden">
     <span id="filename">loading…</span>
+    <span id="dims"></span>
     <span id="modeTag"></span>
     <button class="tool" id="viewsBtn" title="Saved views">Views ▾</button>
   </span>
@@ -679,7 +680,10 @@ def _set_dock_icon():
 
 def open_window(path):
     table = biom.load_table(path)
-    title = f"BIOM Viewer — {os.path.basename(path)}"
+    # Standard Mac document-window convention is just the filename, not
+    # "AppName — filename" -- the app identity is already carried by the
+    # Dock icon and menu bar, so repeating it in the titlebar is redundant.
+    title = os.path.basename(path)
     api = Api(table, path)
     window = webview.create_window(title, html=PAGE, js_api=api, width=1280, height=820, min_size=(600, 400))
     api.window = window
