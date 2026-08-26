@@ -941,7 +941,16 @@ async function render(){
     // the grid's total height past availH by the frozen block's height.
     const pinnedBlockPx = pinnedCount * shortRowHPx()
       + (expandedPinnedField!=null ? statRowH() - shortRowHPx() : 0);
-    rowHPx = (availH - pinnedBlockPx) / (Math.max(renderedRows, rowsPerPage())+1);
+    // When every row of the axis is on screen there is no next page to keep
+    // row heights comparable with, so sizing for a full page just leaves a
+    // hard-edged table floating in a third of a window of nothing -- which
+    // reads as a rendering failure rather than as "that's all the data".
+    // Stretch to fill instead, capped at 1.8x so a two-field table gets
+    // comfortable rows rather than absurd ones.
+    const allOnOnePage = renderedRows + pinnedCount >= rowsTotal();
+    const divisor = allOnOnePage ? renderedRows + 1 : Math.max(renderedRows, rowsPerPage()) + 1;
+    rowHPx = (availH - pinnedBlockPx) / divisor;
+    if(allOnOnePage) rowHPx = Math.min(rowHPx, shortRowHPx() * 1.8);
     headerRowHPx = rowHPx;
   }
   colWPx = availW/renderedCols;
@@ -1300,6 +1309,11 @@ function headerContextItems(el){
     const filterOn = st.filters.some(f=>f.field===field);
     items.push({html: filterOn ? `🔽 Edit filter on ${name}…` : `🔽 Filter by ${name}…`,
       onClick: ()=>openFilterInput(axis, field, el)});
+    // Grouped, macOS-menu style: what you're looking at (sort/filter) is a
+    // different kind of act from changing the field itself (rename/delete).
+    // The separator also keeps Delete from sitting directly under Rename,
+    // where a slip of one row swaps "edit the name" for "remove the field".
+    items.push({sep: true});
     items.push({html: `✏️ Rename ${name}…`, onClick: ()=>openFieldPopover(axis, field, el)});
     // Deleting a field is already low-friction elsewhere in the app (a
     // plain undoable mutation, same as sort/filter/pin -- see the "restore
@@ -1310,10 +1324,12 @@ function headerContextItems(el){
   }
   if(el.dataset.ctxPinRaw !== undefined){
     const rawIdx = parseInt(el.dataset.ctxPinRaw, 10);
+    if(items.length) items.push({sep: true});
     items.push({html: pinnedObs.has(rawIdx) ? '📌 Unpin' : '📌 Pin to top', onClick: ()=>togglePin(rawIdx)});
   }
   if(el.dataset.ctxPinField !== undefined){
     const f = el.dataset.ctxPinField;
+    if(items.length) items.push({sep: true});
     items.push({html: pinnedColFields.has(f) ? '📌 Unpin' : '📌 Pin to top', onClick: ()=>togglePinField(f)});
   }
   return items;
@@ -2046,7 +2062,9 @@ document.addEventListener('contextmenu', (e)=>{
   menu.id = 'ctxMenu';
   menu.style.left = e.clientX + 'px';
   menu.style.top = e.clientY + 'px';
-  let html = headerItems.map((it, i)=>`<button class="ctx-item" data-hi="${i}">${it.html}</button>`).join('');
+  let html = headerItems.map((it, i)=> it.sep
+    ? `<div class="ctx-sep"></div>`
+    : `<button class="ctx-item" data-hi="${i}">${it.html}</button>`).join('');
   if(text){
     if(headerItems.length) html += `<div class="ctx-sep"></div>`;
     // Head-only truncation reads fine for prose but silently drops the
@@ -2061,6 +2079,7 @@ document.addEventListener('contextmenu', (e)=>{
   menu.innerHTML = html;
   document.body.appendChild(menu);
   headerItems.forEach((it, i)=>{
+    if(it.sep) return;
     menu.querySelector(`[data-hi="${i}"]`).onclick = ()=>{ closeContextMenu(); it.onClick(); };
   });
   if(text){
