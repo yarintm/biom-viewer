@@ -898,8 +898,12 @@ async function render(){
   const [r0,r1] = pageBounds(rowPage, rowsPerPage(), rowsTotal());
   const [c0,c1] = pageBounds(colPage, colsPerPage(), colsTotal());
   const rowWord = mode==='data' ? 'rows' : 'fields';
-  document.getElementById('rowRange').textContent = `${rowWord} ${r0+1}-${r1} / ${rowsTotal()}`;
-  document.getElementById('colRange').textContent = `cols ${c0+1}-${c1} / ${colsTotal()}`;
+  // "rows 1-0 / 0" when a filter matches nothing -- count the empty case
+  // out rather than letting the arithmetic print a range that runs backwards.
+  document.getElementById('rowRange').textContent = rowsTotal()===0
+    ? `no ${rowWord}` : `${rowWord} ${r0+1}-${r1} / ${rowsTotal()}`;
+  document.getElementById('colRange').textContent = colsTotal()===0
+    ? 'no cols' : `cols ${c0+1}-${c1} / ${colsTotal()}`;
   // Red = a filter (not just a sort) actually shrank this axis below its
   // full count -- the fields axis (rowFields/colFields) is never filtered,
   // so only flag the id axis in the modes where it's actually on screen.
@@ -911,6 +915,26 @@ async function render(){
   document.getElementById('rowDown').disabled = r1>=rowsTotal();
   document.getElementById('colPrev').disabled = colPage===0;
   document.getElementById('colNext').disabled = c1>=colsTotal();
+
+  // A filter can legitimately match nothing, and the grid had no answer for
+  // it: gridTemplateColumns became `repeat(0, 130px)`, which is invalid CSS,
+  // so the browser dropped the whole declaration and auto-placed every row
+  // header across implicit columns -- the table dissolved into a wrapped
+  // heap of orange chips. Say what happened instead, and offer the way out.
+  if(rowsTotal()===0 || colsTotal()===0){
+    const grid = document.getElementById('grid');
+    grid.className = 'grid-empty-state';
+    grid.style.gridTemplateColumns = '';
+    grid.style.gridTemplateRows = '';
+    const axisWord = colsTotal()===0
+      ? (mode==='row' ? 'fields' : 'columns')
+      : (mode==='col' ? 'fields' : 'rows');
+    grid.innerHTML = `<div class="grid-empty">` +
+      `<div class="grid-empty-msg">No ${axisWord} match the current filters</div>` +
+      `<button class="tool grid-empty-clear">Clear all filters</button></div>`;
+    grid.querySelector('.grid-empty-clear').onclick = clearAllChips;
+    return;
+  }
 
   // Pinned rows are scoped to data/row mode and already excluded from
   // visObs (see recomputeVisible) -- sorted by raw index for a stable,
@@ -1023,6 +1047,10 @@ async function render(){
       ? pinnedFieldsOrdered.map(f => `${f===expandedPinnedField ? statRowH() : pinnedFieldRowH}px`).join(' ') + ' '
       : '';
   const rowsTrack = rowHeights ? rowHeights.map(h=>`${h}px`).join(' ') : `repeat(${renderedRows}, ${rowHPx}px)`;
+  // Clearing the filter that emptied the grid has to put display:grid back;
+  // otherwise the recovered table renders through the empty state's flex
+  // layout and every cell lands in one row.
+  grid.classList.remove('grid-empty-state');
   grid.classList.toggle('col-stats', stripOnCols());
   grid.style.gridTemplateColumns = `${RHW}px repeat(${renderedCols}, ${colWPx}px)`;
   grid.style.gridTemplateRows = `${headerRowHPx}px ${statRowTrack}${pinnedTrack}${rowsTrack}`;

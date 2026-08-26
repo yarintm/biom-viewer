@@ -308,6 +308,17 @@ STYLE = """
   .confirm-msg{font-size:13px}
   .confirm-buttons{display:flex;gap:6px;justify-content:flex-end}
   .confirm-discard{border-color:var(--danger)!important;color:var(--danger)}
+  /* flex:1 so it claims the height #main would otherwise leave empty --
+     without it the grid shrink-wraps its one child and the "centred"
+     message sits in the top-left corner. */
+  /* flex:1 for the height #main would otherwise leave empty, align-self
+     stretch for the width -- the grid normally sets align-self:flex-start
+     so its tracks size it, and with no tracks left it shrink-wrapped the
+     message into the top-left corner. */
+  #grid.grid-empty-state{display:flex;flex:1;min-height:0;align-self:stretch;
+             align-items:center;justify-content:center;border:none}
+  .grid-empty{display:flex;flex-direction:column;align-items:center;gap:10px;color:var(--dim)}
+  .grid-empty-msg{font-size:13px}
   .z{color:var(--z-fg)}
   .nz{background:var(--nz-bg)}
   .mv{color:var(--fg)}
