@@ -653,6 +653,11 @@ function parseFieldQuery(q){
 
 let searchFlat=[], searchHiIdx=-1;
 let searchGroups={}, searchTab='all';
+// The two matched-substring queries currently driving the result list --
+// separate because a "field=value" query (see parseFieldQuery) matches
+// values against fq.value while label kinds (taxa/samples/fields) don't
+// match at all, so highlighting can't just reuse one shared `q`.
+let searchQuery = '', searchValueQuery = '';
 // 'All' shows a taste of each type; a single-type tab shows the long list, which
 // the panel scrolls. ponytail: plain slice, virtualize only if 200 rows drag.
 const ALL_CAP = 6, TAB_CAP = 200;
@@ -661,10 +666,35 @@ const SEARCH_KINDS = [
   ['rowFields', 'Row fields'], ['colFields', 'Col fields'], ['values', 'Values'],
 ];
 
+// Long hierarchical identifiers (taxonomy strings) sharing a common prefix
+// were rendering as indistinguishable end-truncated blobs with no sign of
+// *why* they matched (see live preview: searching "Bacteroides" against
+// taxa returned 6 rows that all read identically up to the ellipsis).
+// Highlights the match and, if the string doesn't fit, centers a truncation
+// window on the match instead of always cutting from the end -- so the
+// matched substring stays visible regardless of where it falls.
+const SR_MAX_CHARS = 70;
+function highlightAround(text, q){
+  const s = String(text);
+  if(!q) return escapeHtml(s);
+  const idx = s.toLowerCase().indexOf(q);
+  if(idx<0) return escapeHtml(s);
+  let start = 0, end = s.length, prefix = '', suffix = '';
+  if(s.length > SR_MAX_CHARS){
+    const half = Math.max(0, Math.floor((SR_MAX_CHARS - q.length) / 2));
+    start = Math.max(0, idx - half);
+    end = Math.min(s.length, idx + q.length + half);
+    if(start>0) prefix = '…';
+    if(end<s.length) suffix = '…';
+  }
+  return prefix + escapeHtml(s.slice(start, idx)) + '<mark>' + escapeHtml(s.slice(idx, idx+q.length)) + '</mark>' +
+    escapeHtml(s.slice(idx+q.length, end)) + suffix;
+}
+
 function searchRowHtml(e){
   return e.type==='rowValue' || e.type==='colValue'
-    ? `<span class="sr-field">${escapeHtml(e.field)}:</span> ${escapeHtml(e.value)}  —  ${escapeHtml(e.id)}`
-    : escapeHtml(e.label);
+    ? `<span class="sr-field">${escapeHtml(e.field)}:</span> ${highlightAround(e.value, searchValueQuery)}  —  ${escapeHtml(e.id)}`
+    : highlightAround(e.label, searchQuery);
 }
 
 function runSearch(raw){
@@ -687,6 +717,7 @@ function runSearch(raw){
       samples: [], taxa: [], rowFields: [], colFields: [],
       values: byValue(idxValues.filter(fieldMatch), fq.value),
     };
+    searchQuery = ''; searchValueQuery = fq.value;
   } else {
     searchGroups = {
       samples: byLabel(idxSamples),
@@ -695,6 +726,7 @@ function runSearch(raw){
       colFields: byLabel(idxColFields),
       values: byValue(idxValues, q),
     };
+    searchQuery = q; searchValueQuery = q;
   }
   searchTab = 'all';
   renderSearchPanel();

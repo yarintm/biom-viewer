@@ -89,6 +89,7 @@ STYLE = """
   .sr{padding:5px 10px;font-size:12.5px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .sr:hover,.sr.hi{background:var(--hl)}
   .sr .sr-field{color:var(--dim)}
+  .sr mark{background:var(--nz-bg);color:inherit;border-radius:2px;padding:0 1px;font-weight:700}
   .sr-more{padding:3px 10px;font-size:11px;color:var(--dim);font-style:italic}
   .sr-more[data-tab]{cursor:pointer;text-decoration:underline}
   .sr-more[data-tab]:hover{color:var(--fg)}
@@ -141,11 +142,18 @@ STYLE = """
      only near the end -- truncating from the end (the default) makes most
      rows look identical. Truncating from the start instead keeps the
      actually-distinguishing tail visible. Standard CSS trick: flip the box
-     to rtl so text-overflow's "end" is the left edge, while unicode-bidi:
-     plaintext keeps the Latin text itself reading LTR. Scoped to Data/Row
-     mode only -- in Col mode .rh holds metadata *field names* (English
-     text), which read better with normal end-truncation. */
-  body.mode-data .rh,body.mode-row .rh{direction:rtl;text-align:left;unicode-bidi:plaintext}
+     to rtl so text-overflow's "end" is the left edge -- the Latin text
+     itself still renders left-to-right because it forms its own embedded
+     LTR run inside the rtl paragraph (default unicode-bidi:normal); adding
+     unicode-bidi:plaintext here is a trap, not a refinement -- it makes
+     the browser auto-detect paragraph direction from the *content*, which
+     is Latin, so it silently overrides direction:rtl and the whole trick
+     does nothing. Verified in a live preview harness after this shipped
+     with plaintext and the truncation direction turned out unchanged from
+     before the "fix". Scoped to Data/Row mode only -- in Col mode .rh
+     holds metadata *field names* (English text), which read better with
+     normal end-truncation. */
+  body.mode-data .rh,body.mode-row .rh{direction:rtl;text-align:left}
   .pin-last{border-bottom:2px solid var(--accent)}
   #filterPopover,#ctxMenu,#viewsPopover,#confirmPopover{background:var(--panel-raised);border:1px solid var(--border);
              box-shadow:var(--shadow-md);border-radius:var(--radius-md)}
