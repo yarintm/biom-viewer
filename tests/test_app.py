@@ -493,3 +493,79 @@ def test_workspace_store_keeps_other_identities_untouched(tmp_path):
 
     assert store.load_workspace(DatasetIdentity("dataset-1")).current.mode == "data"
     assert store.load_workspace(DatasetIdentity("dataset-2")).current.mode == "row"
+
+
+def api_with_store(table, tmp_path, filename="fake.biom"):
+    store = WorkspaceStore(tmp_path / "state.json")
+    return app.Api(table, filename, workspace_store=store)
+
+
+def test_api_load_workspace_starts_empty(tmp_path):
+    a = api_with_store(make_table(), tmp_path)
+
+    workspace = a.load_workspace()
+
+    assert workspace == {"current": None, "views": []}
+
+
+def test_api_save_current_then_load_workspace_returns_it(tmp_path):
+    a = api_with_store(make_table(), tmp_path)
+    payload = make_view_state().to_payload()
+
+    a.save_current(payload)
+    workspace = a.load_workspace()
+
+    assert workspace["current"] == payload
+
+
+def test_api_save_view_then_load_workspace_lists_it(tmp_path):
+    a = api_with_store(make_table(), tmp_path)
+    payload = make_view_state().to_payload()
+
+    a.save_view("High abundance", payload)
+    workspace = a.load_workspace()
+
+    assert len(workspace["views"]) == 1
+    assert workspace["views"][0]["name"] == "High abundance"
+
+
+def test_api_delete_view_removes_it(tmp_path):
+    a = api_with_store(make_table(), tmp_path)
+    a.save_view("A", make_view_state().to_payload())
+
+    a.delete_view("A")
+
+    assert a.load_workspace()["views"] == []
+
+
+def test_api_rename_view_renames_it(tmp_path):
+    a = api_with_store(make_table(), tmp_path)
+    a.save_view("A", make_view_state().to_payload())
+
+    result = a.rename_view("A", "B")
+
+    assert result == {"ok": True}
+    assert [v["name"] for v in a.load_workspace()["views"]] == ["B"]
+
+
+def test_api_rename_view_onto_taken_name_returns_not_ok(tmp_path):
+    a = api_with_store(make_table(), tmp_path)
+    a.save_view("A", make_view_state().to_payload())
+    a.save_view("B", make_view_state().to_payload())
+
+    result = a.rename_view("A", "B")
+
+    assert result == {"ok": False}
+    assert [v["name"] for v in a.load_workspace()["views"]] == ["A", "B"]
+
+
+def test_api_two_instances_same_table_id_share_a_workspace(tmp_path):
+    table = make_table()
+    table.table_id = "shared-id"
+    store = WorkspaceStore(tmp_path / "state.json")
+    first = app.Api(table, "fake.biom", workspace_store=store)
+    second = app.Api(table, "fake.biom", workspace_store=store)
+
+    first.save_view("A", make_view_state().to_payload())
+
+    assert [v["name"] for v in second.load_workspace()["views"]] == ["A"]

@@ -436,11 +436,13 @@ class Api:
     the same process each stay bound to their own file.
     """
 
-    def __init__(self, table, filename):
+    def __init__(self, table, filename, workspace_store: WorkspaceStore | None = None):
         self._table = table
         self._filename = filename
         self.window = None  # set by open_window() once create_window() returns
         self._csc_matrix = None
+        self._workspace_store = workspace_store or WorkspaceStore.default()
+        self._identity = DatasetIdentity.from_table(table)
 
     # ponytail: id list sent once (text-only, cheap even at ~1e5 rows); paginate if a table
     # ever has >~500k ids and this becomes a multi-MB response.
@@ -493,6 +495,34 @@ class Api:
 
     def field_summary(self, axis, field, idxs=None):
         return field_summary(self._table, axis, field, idxs)
+
+    def load_workspace(self) -> dict:
+        return self._workspace_store.load_workspace(self._identity).to_payload()
+
+    def save_current(self, state: dict) -> None:
+        workspace = self._workspace_store.load_workspace(self._identity)
+        workspace.current = ViewState.from_payload(state)
+        self._workspace_store.save_workspace(self._identity, workspace)
+
+    def save_view(self, name: str, state: dict) -> None:
+        workspace = self._workspace_store.load_workspace(self._identity)
+        saved_at = datetime.now(timezone.utc).isoformat()
+        workspace.upsert_view(SavedView(name=name, state=ViewState.from_payload(state), saved_at=saved_at))
+        self._workspace_store.save_workspace(self._identity, workspace)
+
+    def delete_view(self, name: str) -> None:
+        workspace = self._workspace_store.load_workspace(self._identity)
+        workspace.delete_view(name)
+        self._workspace_store.save_workspace(self._identity, workspace)
+
+    def rename_view(self, old_name: str, new_name: str) -> dict:
+        workspace = self._workspace_store.load_workspace(self._identity)
+        try:
+            workspace.rename_view(old_name, new_name)
+        except ViewNameTakenError:
+            return {"ok": False}
+        self._workspace_store.save_workspace(self._identity, workspace)
+        return {"ok": True}
 
     def open_url(self, url):
         # The right-click "Search Google" menu builds this URL itself (see
