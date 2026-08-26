@@ -415,11 +415,11 @@ STYLE = """
   .rh-stats .rh-label{font-size:var(--fs);font-weight:700;color:var(--hdr-fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
              background:var(--hdr-bg);margin:-4px -6px 4px;padding:4px 6px;cursor:pointer;flex-shrink:0}
   .rh-stats .rh-label:hover{background:var(--input-border)}
-  /* The label bar's own opaque background paints over the parent cell's
-     top/left/right edges (its negative margins stretch it to the cell
-     border), hiding the selection border there -- redraw those edges on
-     the label itself so the border reads as continuous when selected. */
-  .rh-stats.hl-row .rh-label{box-shadow:inset 0 2px 0 var(--sel-outline),inset 2px 0 0 var(--sel-outline),inset -2px 0 0 var(--sel-outline)}
+  /* This used to redraw the accent selection border along the label bar's
+     edges, since the bar's opaque background paints over the parent cell's
+     own. There is no accent border on a selected header any more -- it was
+     the box that drew the complaint -- and the tint that replaced it is set
+     further up the sheet; this rule only survived to undo it. */
   /* flex-shrink:0: without it, if the stat block's fixed-height grid track
      (see statRowH()) is even a hair short of the flex column's natural
      content height, every line shrinks below its own line-height to fit --

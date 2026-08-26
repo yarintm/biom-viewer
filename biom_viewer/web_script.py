@@ -960,6 +960,18 @@ async function render(){
     // paged position space that expandedFieldRow indexes into), so they
     // always use the short track -- computeFit() already reserved that.
     headerRowHPx = shortRowHPx();
+    // Same fill-the-window rule as the plain branch below: with every field
+    // already on screen there is no next page to stay comparable with, and
+    // the tall summary row makes the leftover gap below the table bigger,
+    // not smaller. Only the short rows grow -- the expanded one is sized by
+    // its content. Skipped when fields are frozen, since their track is
+    // budgeted separately in computeFit and double-counting it here would
+    // push the grid past availH.
+    const shortCount = renderedRows - 1;
+    if(pinnedCount===0 && shortCount>0 && renderedRows >= rowsTotal()){
+      const slack = availH - (headerRowHPx + statRowH() + shortCount*shortRowHPx());
+      if(slack > 0) headerRowHPx = Math.min(shortRowHPx() + slack/(shortCount+1), shortRowHPx()*1.8);
+    }
     rowHeights = [];
     for(let r=r0;r<r1;r++) rowHeights.push(r===fieldExpandedIdx ? statRowH() : headerRowHPx);
   } else {
