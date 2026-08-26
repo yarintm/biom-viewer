@@ -566,7 +566,7 @@ PAGE = """<!doctype html>
     --input-border:light-dark(#bbb,#555);
     --cell-border:light-dark(#ddd,#333); --hdr-bg:light-dark(#e8e8e8,#252525);
     --hdr-fg:light-dark(#333,#aaa);
-    --nz-bg:light-dark(#bfe8d3,#274b3a); --z-fg:light-dark(#aaa,#666);
+    --nz-bg:light-dark(#bfe8d3,#274b3a); --z-fg:light-dark(#808080,#7a7a7a);
     --hl:light-dark(#cdf0dc,#274b3a); --sel-outline:var(--accent);
     --fs:11px;
     --row-meta:light-dark(#c96a1a,#e08a3c); --row-meta-bg:light-dark(#fde3c8,#4a3420);
@@ -732,16 +732,9 @@ PAGE = """<!doctype html>
      top row) blue — in data mode both are on screen at once */
   body.mode-row .rh,body.mode-data .rh{background:var(--row-meta-bg);color:var(--row-meta);border-color:var(--row-meta)}
   body.mode-col .hdr.colhdr,body.mode-data .hdr.colhdr{background:var(--col-meta-bg);color:var(--col-meta);border-color:var(--col-meta)}
-  #replaceOverlay{position:fixed;inset:0;background:rgba(0,0,0,.45);display:none;
-               align-items:center;justify-content:center;z-index:10}
-  #replaceOverlay.open{display:flex}
-  #replaceModal{background:var(--panel-bg);border:1px solid var(--border);border-radius:8px;
-             width:420px;max-width:92vw;box-shadow:0 12px 40px rgba(0,0,0,.35)}
-  #replaceModal header{display:flex;align-items:center;justify-content:space-between;
-                     padding:12px 14px;border-bottom:1px solid var(--border)}
-  #replaceModal header h3{margin:0;font-size:14px}
-  #replaceModal .x{cursor:pointer;color:var(--dim);font-size:16px;line-height:1;background:none;border:none}
-  #replaceModal .x:hover{color:var(--fg)}
+  #replaceModal{width:420px}
+  #replaceModal header{justify-content:space-between}
+  #replaceModal header h3{margin-right:0}
   #replaceModal .rp-form{padding:12px 14px;display:flex;flex-wrap:wrap;gap:6px}
   #replaceModal .rp-form select, #replaceModal .rp-form input{background:var(--input-bg);color:var(--fg);
              border:1px solid var(--input-border);border-radius:4px;padding:4px 6px;font-size:12.5px}
@@ -848,8 +841,8 @@ PAGE = """<!doctype html>
     <div id="grid"></div>
   </div>
 </div>
-<div id="replaceOverlay">
-  <div id="replaceModal">
+<div id="replaceOverlay" class="wm-overlay">
+  <div id="replaceModal" class="wm-modal">
     <header>
       <h3>Find &amp; Replace</h3>
       <button class="x" id="replaceClose">✕</button>
