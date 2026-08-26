@@ -1106,6 +1106,7 @@ function restoreState(snap){
   recomputeVisible('observation');
   recomputeVisible('sample');
   rowPage=0; colPage=0;
+  scheduleAutosave();
   render();
   renderAxisChips();
 }
