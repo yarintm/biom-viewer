@@ -1083,10 +1083,21 @@ function snapshotState(){
     colFields: colFields.slice(),
   };
 }
+let autosaveTimer = null;
+// Debounced so a burst of edits (typing a filter value, dragging a range)
+// writes once, ~1s after things settle, not on every keystroke.
+function scheduleAutosave(){
+  clearTimeout(autosaveTimer);
+  autosaveTimer = setTimeout(()=>{
+    window.pywebview.api.save_current(captureViewState());
+  }, 1000);
+}
+
 function recordHistory(){
   historyPast.push(snapshotState());
   if(historyPast.length>50) historyPast.shift();
   historyFuture = [];
+  scheduleAutosave();
 }
 function restoreState(snap){
   axisState = snap.axisState;
@@ -1210,6 +1221,7 @@ function setMode(m){
   document.body.className = 'mode-'+m;
   document.getElementById('modeTag').textContent =
     m==='col' ? 'COL METADATA' : m==='row' ? 'ROW METADATA' : '';
+  scheduleAutosave();
 }
 
 function fieldUnion(metaArr){
@@ -2508,6 +2520,7 @@ function togglePin(rawIdx){
   // action (unlike sort/filter), a full page reset would be jarring.
   const maxPage = Math.max(0, Math.ceil(rowsTotal()/rowsPerPage()) - 1);
   rowPage = Math.min(rowPage, maxPage);
+  scheduleAutosave();
   render();
   renderAxisChips();
 }
@@ -2517,6 +2530,7 @@ function togglePinField(field){
   if(selPinnedField===field) selPinnedField = null;
   const maxPage = Math.max(0, Math.ceil(rowsTotal()/rowsPerPage()) - 1);
   rowPage = Math.min(rowPage, maxPage);
+  scheduleAutosave();
   render();
   renderAxisChips();
 }
