@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
 """Lazy-loading BIOM viewer: native window (pywebview) + biom-format, sparse-window slicing, canvas grid UI."""
+from __future__ import annotations
+
+import hashlib
+import json
 import math
 import os
 import socket
@@ -7,6 +11,9 @@ import sys
 import threading
 import webbrowser
 from collections import Counter
+from dataclasses import dataclass, replace
+from datetime import datetime, timezone
+from pathlib import Path
 
 import biom
 import numpy as np
@@ -262,6 +269,99 @@ def write_biom_file(table, path):
     finally:
         if os.path.exists(tmp_path):
             os.remove(tmp_path)
+
+
+class ViewNameTakenError(Exception):
+    """Raised by Workspace.rename_view when the new name already has a saved view."""
+
+
+@dataclass(frozen=True)
+class ViewState:
+    """One snapshot of on-screen state: mode, axis state, field lists, and both pin sets."""
+
+    mode: str
+    axis_state: dict
+    row_fields: list[str]
+    col_fields: list[str]
+    pinned_observations: list[int]
+    pinned_column_fields: list[str]
+
+    @classmethod
+    def from_payload(cls, payload: dict) -> "ViewState":
+        return cls(
+            mode=payload["mode"],
+            axis_state=payload["axisState"],
+            row_fields=payload["rowFields"],
+            col_fields=payload["colFields"],
+            pinned_observations=payload["pinnedObs"],
+            pinned_column_fields=payload["pinnedColFields"],
+        )
+
+    def to_payload(self) -> dict:
+        return {
+            "mode": self.mode,
+            "axisState": self.axis_state,
+            "rowFields": self.row_fields,
+            "colFields": self.col_fields,
+            "pinnedObs": self.pinned_observations,
+            "pinnedColFields": self.pinned_column_fields,
+        }
+
+
+@dataclass(frozen=True)
+class SavedView:
+    """A named, timestamped ViewState the user explicitly saved."""
+
+    name: str
+    state: ViewState
+    saved_at: str
+
+    @classmethod
+    def from_payload(cls, payload: dict) -> "SavedView":
+        return cls(name=payload["name"], state=ViewState.from_payload(payload), saved_at=payload["savedAt"])
+
+    def to_payload(self) -> dict:
+        return {**self.state.to_payload(), "name": self.name, "savedAt": self.saved_at}
+
+
+@dataclass
+class Workspace:
+    """Everything persisted for one dataset identity: the live 'current' state plus named saves."""
+
+    current: ViewState | None
+    views: list[SavedView]
+
+    @classmethod
+    def empty(cls) -> "Workspace":
+        return cls(current=None, views=[])
+
+    @classmethod
+    def from_payload(cls, payload: dict) -> "Workspace":
+        current_payload = payload.get("current")
+        current = ViewState.from_payload(current_payload) if current_payload else None
+        views = [SavedView.from_payload(v) for v in payload.get("views", [])]
+        return cls(current=current, views=views)
+
+    def to_payload(self) -> dict:
+        return {
+            "current": self.current.to_payload() if self.current else None,
+            "views": [v.to_payload() for v in self.views],
+        }
+
+    def upsert_view(self, view: SavedView) -> None:
+        self.views = [v for v in self.views if v.name != view.name]
+        self.views.append(view)
+
+    def delete_view(self, name: str) -> None:
+        self.views = [v for v in self.views if v.name != name]
+
+    def rename_view(self, old_name: str, new_name: str) -> None:
+        if self.find_view(new_name) is not None:
+            raise ViewNameTakenError(new_name)
+        self.views = [replace(v, name=new_name) if v.name == old_name else v for v in self.views]
+
+    def find_view(self, name: str) -> SavedView | None:
+        return next((v for v in self.views if v.name == name), None)
 
 
 class Api:

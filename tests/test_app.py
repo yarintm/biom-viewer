@@ -2,6 +2,7 @@ import json
 
 import numpy as np
 import biom
+import pytest
 
 from biom_viewer import app
 from biom_viewer.app import _histogram, _numeric_summary
@@ -294,3 +295,121 @@ def test_build_export_table_normalizes_mixed_type_metadata_values(tmp_path):
     # HDF5 reader as a numpy object array of bytes, not a plain list of str
     # -- meta() must still be able to JSON-serialize it for the frontend.
     json.dumps(api(reloaded).meta())
+
+
+from biom_viewer.app import SavedView, ViewState, ViewNameTakenError, Workspace
+
+
+def make_view_state(mode="data"):
+    return ViewState(
+        mode=mode,
+        axis_state={"observation": {"sortField": None, "sortDir": 0, "filters": [], "replacements": [], "renames": {}, "deletedFields": []}},
+        row_fields=["age"],
+        col_fields=["site"],
+        pinned_observations=[1, 2],
+        pinned_column_fields=["site"],
+    )
+
+
+def test_view_state_round_trips_through_payload():
+    state = make_view_state()
+
+    payload = state.to_payload()
+    restored = ViewState.from_payload(payload)
+
+    assert restored == state
+
+
+def test_view_state_payload_uses_camel_case_keys():
+    payload = make_view_state().to_payload()
+
+    assert set(payload) == {"mode", "axisState", "rowFields", "colFields", "pinnedObs", "pinnedColFields"}
+
+
+def test_saved_view_round_trips_through_payload():
+    view = SavedView(name="High abundance", state=make_view_state(), saved_at="2026-08-26T10:00:00+00:00")
+
+    payload = view.to_payload()
+    restored = SavedView.from_payload(payload)
+
+    assert restored == view
+    assert payload["name"] == "High abundance"
+    assert payload["savedAt"] == "2026-08-26T10:00:00+00:00"
+
+
+def test_workspace_upsert_view_appends_new_name():
+    workspace = Workspace.empty()
+
+    workspace.upsert_view(SavedView(name="A", state=make_view_state(), saved_at="t"))
+
+    assert [v.name for v in workspace.views] == ["A"]
+
+
+def test_workspace_upsert_view_replaces_existing_name():
+    workspace = Workspace.empty()
+    workspace.upsert_view(SavedView(name="A", state=make_view_state("data"), saved_at="t1"))
+
+    workspace.upsert_view(SavedView(name="A", state=make_view_state("row"), saved_at="t2"))
+
+    assert len(workspace.views) == 1
+    assert workspace.views[0].saved_at == "t2"
+
+
+def test_workspace_delete_view_removes_matching_name():
+    workspace = Workspace.empty()
+    workspace.upsert_view(SavedView(name="A", state=make_view_state(), saved_at="t"))
+
+    workspace.delete_view("A")
+
+    assert workspace.views == []
+
+
+def test_workspace_delete_view_missing_name_is_noop():
+    workspace = Workspace.empty()
+
+    workspace.delete_view("does-not-exist")
+
+    assert workspace.views == []
+
+
+def test_workspace_rename_view_renames_in_place():
+    workspace = Workspace.empty()
+    workspace.upsert_view(SavedView(name="A", state=make_view_state(), saved_at="t"))
+
+    workspace.rename_view("A", "B")
+
+    assert [v.name for v in workspace.views] == ["B"]
+
+
+def test_workspace_rename_view_onto_taken_name_raises_and_leaves_both_untouched():
+    workspace = Workspace.empty()
+    workspace.upsert_view(SavedView(name="A", state=make_view_state(), saved_at="t"))
+    workspace.upsert_view(SavedView(name="B", state=make_view_state(), saved_at="t"))
+
+    with pytest.raises(ViewNameTakenError):
+        workspace.rename_view("A", "B")
+
+    assert [v.name for v in workspace.views] == ["A", "B"]
+
+
+def test_workspace_find_view_returns_none_when_missing():
+    workspace = Workspace.empty()
+
+    result = workspace.find_view("nope")
+
+    assert result is None
+
+
+def test_workspace_round_trips_through_payload():
+    workspace = Workspace(current=make_view_state(), views=[SavedView(name="A", state=make_view_state(), saved_at="t")])
+
+    restored = Workspace.from_payload(workspace.to_payload())
+
+    assert restored == workspace
+
+
+def test_workspace_from_payload_handles_no_current():
+    restored = Workspace.from_payload({"current": None, "views": []})
+
+    assert restored.current is None
+    assert restored.views == []
