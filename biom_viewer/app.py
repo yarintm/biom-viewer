@@ -2213,12 +2213,14 @@ function renderAxisChips(){
       pinnedObs.clear();
       selPinnedRaw = null;
       recomputeVisible('observation');
+      scheduleAutosave();
       render();
       renderAxisChips();
     };
     else if(kind==='unpinAllFields') btn.onclick = ()=>{
       pinnedColFields.clear();
       selPinnedField = null;
+      scheduleAutosave();
       render();
       renderAxisChips();
     };
