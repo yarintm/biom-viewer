@@ -662,6 +662,13 @@ PAGE = """<!doctype html>
   .hdr.colhdr:hover{background:var(--input-border)}
   .hdr.colhdr:has(.axis-ctl),.rh:has(.axis-ctl){display:flex;align-items:center}
   .hdr-label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0}
+  /* Row-header identifiers (e.g. taxonomy strings "k__Bacteria|p__...|s__species")
+     share a long common prefix and differ only near the end -- truncating from
+     the end (the default) makes most rows look identical. Truncating from the
+     start instead keeps the actually-distinguishing tail visible. Standard
+     CSS trick: flip the box to rtl so text-overflow's "end" is the left edge,
+     while unicode-bidi:plaintext keeps the Latin text itself reading LTR. */
+  .rh .hdr-label{direction:rtl;text-align:left;unicode-bidi:plaintext}
   .axis-ctl{display:flex;gap:2px;margin-left:4px;flex:none}
   .axis-ctl button{background:none;border:none;color:var(--dim);cursor:pointer;font-size:calc(var(--fs)*0.95);
              padding:0 2px;line-height:1}
