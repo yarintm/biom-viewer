@@ -2607,16 +2607,27 @@ function startRenameView(row, oldName){
   const input = row.querySelector('.views-rename-input');
   input.focus();
   input.select();
+  // Removing the input (via openViewsPopover -> closeViewsPopover) while it's
+  // still focused fires a native blur, which would otherwise re-run commit()
+  // a second time. Guard so each rename attempt only commits once, and let
+  // Escape set the guard itself so the ensuing blur is a no-op that never
+  // reads input.value or calls the API.
+  let committed = false;
   const commit = async ()=>{
+    if(committed) return;
+    committed = true;
     const newName = input.value.trim();
     if(!newName || newName===oldName){ openViewsPopover(); return; }
     const result = await window.pywebview.api.rename_view(oldName, newName);
-    if(!result.ok){ input.classList.add('error'); input.title = 'Name already taken'; return; }
+    if(!result.ok){ input.classList.add('error'); input.title = 'Name already taken'; committed = false; return; }
     if(lastAppliedViewName===oldName) lastAppliedViewName = newName;
     await refreshSavedViews();
     openViewsPopover();
   };
-  input.addEventListener('keydown', e=>{ if(e.key==='Enter') commit(); if(e.key==='Escape') openViewsPopover(); });
+  input.addEventListener('keydown', e=>{
+    if(e.key==='Enter') commit();
+    if(e.key==='Escape'){ committed = true; openViewsPopover(); }
+  });
   input.addEventListener('blur', commit);
 }
 
@@ -2636,9 +2647,16 @@ function applyView(view, name){
   renderAxisChips();
 }
 
+function closeConfirmPopover(){
+  const existing = document.getElementById('confirmPopover');
+  if(existing) existing.remove();
+  return !!existing;
+}
+
 function confirmDiscardCurrent(onConfirm){
   closeFilterPopover();
   closeViewsPopover();
+  closeConfirmPopover();
   const pop = document.createElement('div');
   pop.id = 'confirmPopover';
   pop.innerHTML = `<div class="confirm-msg">Discard current filters?</div>` +
@@ -3027,6 +3045,7 @@ document.addEventListener('keydown', (e)=>{
   if(e.key==='Escape'){
     let handled = false;
     if(closeFilterPopover()) handled = true;
+    if(closeViewsPopover()) handled = true;
     if(closeContextMenu()) handled = true;
     ['codeOverlay','replaceOverlay','cellOverlay','valuesOverlay'].forEach(id=>{
       const el = document.getElementById(id);
