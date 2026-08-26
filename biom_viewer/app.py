@@ -2579,7 +2579,7 @@ function wireViewsPopover(pop){
   const saveBtn = pop.querySelector('.views-save-btn');
   const doSave = ()=> saveCurrentAsView(saveInput.value.trim());
   saveBtn.onclick = doSave;
-  saveInput.addEventListener('keydown', e=>{ if(e.key==='Enter') doSave(); if(e.key==='Escape') closeViewsPopover(); });
+  saveInput.addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.stopPropagation(); doSave(); } if(e.key==='Escape'){ e.stopPropagation(); closeViewsPopover(); } });
 }
 
 async function refreshSavedViews(){
@@ -2625,8 +2625,8 @@ function startRenameView(row, oldName){
     openViewsPopover();
   };
   input.addEventListener('keydown', e=>{
-    if(e.key==='Enter') commit();
-    if(e.key==='Escape'){ committed = true; openViewsPopover(); }
+    if(e.key==='Enter'){ e.stopPropagation(); commit(); }
+    if(e.key==='Escape'){ e.stopPropagation(); committed = true; openViewsPopover(); }
   });
   input.addEventListener('blur', commit);
 }
