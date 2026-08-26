@@ -565,6 +565,7 @@ PAGE = """<!doctype html>
   <span style="display:flex;align-items:center;overflow:hidden">
     <span id="filename">loading…</span>
     <span id="modeTag"></span>
+    <button class="tool" id="viewsBtn" title="Saved views">Views ▾</button>
   </span>
   <span id="toolbar">
     <span id="modeGroup">
@@ -572,7 +573,6 @@ PAGE = """<!doctype html>
       <button data-m="row">Row metadata</button>
       <button data-m="col">Col metadata</button>
     </span>
-    <button class="tool" id="viewsBtn" title="Saved views">Views ▾</button>
     <span id="searchWrap">
       <input id="searchBox" type="text" placeholder="Search…" autocomplete="off">
       <button class="tool" id="searchPin" title="Keep search results open">📌</button>

@@ -1413,13 +1413,16 @@ function updateViewsBtnLabel(){
   if(!lastAppliedViewName){
     btn.textContent = 'Views ▾';
     btn.title = 'Saved views';
+    btn.classList.remove('views-active', 'views-dirty');
     return;
   }
   const view = savedViews.find(v => v.name===lastAppliedViewName);
   const dirty = !view || !viewStatesEqual(captureViewState(), viewStatePayload(view));
   btn.innerHTML = `<span class="views-current-name">${escapeHtml(lastAppliedViewName)}</span>` +
-    (dirty ? `<span class="views-dirty-dot" title="Unsaved changes">●</span>` : '') + ` ▾`;
-  btn.title = dirty ? `${lastAppliedViewName} (unsaved changes)` : lastAppliedViewName;
+    (dirty ? `<span class="views-dirty-dot" title="Unsaved changes -- open Views to update">●</span>` : '') + ` ▾`;
+  btn.title = dirty ? `${lastAppliedViewName} (unsaved changes -- open Views to update)` : lastAppliedViewName;
+  btn.classList.add('views-active');
+  btn.classList.toggle('views-dirty', dirty);
 }
 
 // One undo step for the whole chips row -- individual chip removers each
@@ -1710,7 +1713,7 @@ document.addEventListener('click', (e)=>{
   const pop = document.getElementById('filterPopover');
   if(pop && !pop.contains(e.target) && !e.target.closest('.ctx-item')) closeFilterPopover();
   const viewsPop = document.getElementById('viewsPopover');
-  if(viewsPop && !viewsPop.contains(e.target) && e.target!==viewsBtn) closeViewsPopover();
+  if(viewsPop && !viewsPop.contains(e.target) && !e.target.closest('#viewsBtn')) closeViewsPopover();
 });
 
 function closeViewsPopover(){
@@ -1737,11 +1740,17 @@ function openViewsPopover(){
   const rows = savedViews.length
     ? savedViews.map(viewRowHtml).join('')
     : `<div class="views-empty">No saved views yet</div>`;
-  pop.innerHTML = `<div class="views-list">${rows}</div>` +
+  const activeView = lastAppliedViewName ? savedViews.find(v => v.name===lastAppliedViewName) : null;
+  const dirty = !!activeView && !viewStatesEqual(captureViewState(), viewStatePayload(activeView));
+  const updateBanner = dirty
+    ? `<button class="views-update-btn">● Update "${escapeHtml(lastAppliedViewName)}" with current changes</button>`
+    : '';
+  pop.innerHTML = updateBanner + `<div class="views-list">${rows}</div>` +
     `<div class="views-save"><input class="views-save-input" type="text" placeholder="Save current as…">` +
     `<button class="views-save-btn">Save</button></div>`;
   document.body.appendChild(pop);
   wireViewsPopover(pop);
+  if(dirty) pop.querySelector('.views-update-btn').onclick = ()=> saveCurrentAsView(lastAppliedViewName);
 }
 
 function wireViewsPopover(pop){

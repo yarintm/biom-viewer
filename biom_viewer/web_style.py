@@ -101,10 +101,17 @@ STYLE = """
   button.nav:hover:not(:disabled),button.tool:hover{background:var(--hl);border-color:var(--sel-outline)}
   button.nav:active:not(:disabled),button.tool:active{transform:translateY(.5px)}
   button.nav:disabled{opacity:.35;cursor:default}
-  #viewsBtn{max-width:220px}
+  #viewsBtn{max-width:220px;flex-shrink:0;margin-left:10px}
   .views-current-name{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
              max-width:150px;display:inline-block;vertical-align:bottom}
-  .views-dirty-dot{color:var(--accent);font-size:8px;margin:0 1px;vertical-align:middle}
+  .views-dirty-dot{color:var(--row-meta);font-size:8px;margin:0 1px;vertical-align:middle}
+  #viewsBtn.views-active{border-color:var(--accent);background:var(--hl)}
+  #viewsBtn.views-active.views-dirty{border-color:var(--row-meta);background:var(--row-meta-bg)}
+  .views-update-btn{display:block;width:100%;box-sizing:border-box;text-align:left;
+             background:var(--row-meta-bg);color:var(--row-meta);border:1px solid var(--row-meta);
+             border-radius:5px;padding:6px 8px;font-size:12px;font-weight:600;cursor:pointer;
+             margin-bottom:6px;transition:filter var(--dur) var(--ease)}
+  .views-update-btn:hover{filter:brightness(0.95)}
   #body{display:flex;flex:1;min-height:0;padding:0 14px 10px}
   #rowNav{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;padding-right:10px}
   #rowNav span{writing-mode:vertical-rl;color:var(--dim);white-space:nowrap;font-size:11.5px}
