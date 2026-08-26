@@ -25,14 +25,18 @@ One JSON file at `platformdirs.user_data_dir("BiomViewer") / "state.json"` (macO
 ```json
 {
   "<identity-key>": {
-    "current": { "mode": "data", "axisState": {...}, "pinnedObs": [...], "pinnedColFields": [...] },
+    "current": { "mode": "data", "axisState": {...}, "rowFields": [...], "colFields": [...],
+                 "pinnedObs": [...], "pinnedColFields": [...] },
     "views": [
       { "name": "High abundance only", "mode": "data", "axisState": {...},
+        "rowFields": [...], "colFields": [...],
         "pinnedObs": [...], "pinnedColFields": [...], "savedAt": "2026-08-26T10:00:00" }
     ]
   }
 }
 ```
+
+`rowFields`/`colFields` are included alongside `axisState` — `deleteField` splices them directly (`biom_viewer/app.py:1876-1878`) rather than only recording the deletion in `axisState.deletedFields`, so a view can't restore a deleted or reordered field without them. This is the same pair undo's `restoreState()` already restores together with `axisState` for exactly this reason.
 
 Identity key derivation, computed once per `Api` instance from data already loaded in `meta()`:
 
@@ -48,9 +52,11 @@ This repo is deliberately single-file (`biom_viewer/app.py`), so "one class per 
 ```python
 @dataclass(frozen=True)
 class ViewState:
-    """One snapshot of on-screen state: mode, axis state, and both pin sets."""
+    """One snapshot of on-screen state: mode, axis state, field lists, and both pin sets."""
     mode: str
     axis_state: dict
+    row_fields: list[str]
+    col_fields: list[str]
     pinned_observations: list[int]
     pinned_column_fields: list[str]
 
