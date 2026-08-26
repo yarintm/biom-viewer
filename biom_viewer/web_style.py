@@ -101,6 +101,10 @@ STYLE = """
   button.nav:hover:not(:disabled),button.tool:hover{background:var(--hl);border-color:var(--sel-outline)}
   button.nav:active:not(:disabled),button.tool:active{transform:translateY(.5px)}
   button.nav:disabled{opacity:.35;cursor:default}
+  #viewsBtn{max-width:220px}
+  .views-current-name{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+             max-width:150px;display:inline-block;vertical-align:bottom}
+  .views-dirty-dot{color:var(--accent);font-size:8px;margin:0 1px;vertical-align:middle}
   #body{display:flex;flex:1;min-height:0;padding:0 14px 10px}
   #rowNav{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;padding-right:10px}
   #rowNav span{writing-mode:vertical-rl;color:var(--dim);white-space:nowrap;font-size:11.5px}

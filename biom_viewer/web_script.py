@@ -1401,6 +1401,25 @@ function renderAxisChips(){
     };
     else btn.onclick = ()=>removeFilter(btn.dataset.axis, btn.dataset.field);
   });
+  updateViewsBtnLabel();
+}
+
+// renderAxisChips() already runs after every state-changing action in the
+// app (sort/filter/pin/rename/undo/view-switch/etc), so piggybacking here
+// is the one hook point that reliably keeps the label current without
+// scattering calls across every mutator.
+function updateViewsBtnLabel(){
+  const btn = document.getElementById('viewsBtn');
+  if(!lastAppliedViewName){
+    btn.textContent = 'Views ▾';
+    btn.title = 'Saved views';
+    return;
+  }
+  const view = savedViews.find(v => v.name===lastAppliedViewName);
+  const dirty = !view || !viewStatesEqual(captureViewState(), viewStatePayload(view));
+  btn.innerHTML = `<span class="views-current-name">${escapeHtml(lastAppliedViewName)}</span>` +
+    (dirty ? `<span class="views-dirty-dot" title="Unsaved changes">●</span>` : '') + ` ▾`;
+  btn.title = dirty ? `${lastAppliedViewName} (unsaved changes)` : lastAppliedViewName;
 }
 
 // One undo step for the whole chips row -- individual chip removers each
