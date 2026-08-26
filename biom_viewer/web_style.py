@@ -370,6 +370,13 @@ STYLE = """
   #replaceModal .rp-form select, #replaceModal .rp-form input{background:var(--input-bg);color:var(--fg);
              border:1px solid var(--input-border);border-radius:4px;padding:4px 6px;font-size:12.5px}
   #replaceModal .rp-form select{flex:1 1 100%}
+  .rp-label{flex:1 1 100%;font-size:11px;color:var(--dim);margin-bottom:-3px}
+  /* Bottom-right and accent-filled: it is the only action in the dialog
+     that changes anything, and it was sitting bottom-left looking exactly
+     like the toolbar buttons that don't. */
+  #replaceModal .rp-form #rpApply{margin-left:auto;background:var(--accent);color:var(--bg);
+             border-color:var(--accent);font-weight:600}
+  #replaceModal .rp-form #rpApply:hover{filter:brightness(1.08);background:var(--accent)}
   #replaceModal .rp-form input{flex:1 1 45%;min-width:0}
   #replaceModal .rp-form button{flex:0 0 auto}
   #rpList{padding:0 14px 14px;display:flex;flex-direction:column;gap:4px;max-height:30vh;overflow-y:auto}

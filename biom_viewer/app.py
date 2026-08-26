@@ -614,11 +614,16 @@ PAGE = """<!doctype html>
       <h3>Find &amp; Replace</h3>
       <button class="x" id="replaceClose">✕</button>
     </header>
+    <!-- Labelled: the two selects sat unlabelled one above the other, so
+         which was "where to look" and which was "which field" was left to
+         be inferred from their current values. -->
     <div class="rp-form">
+      <label class="rp-label" for="rpAxis">Search in</label>
       <select id="rpAxis">
         <option value="observation">Observation (row) metadata</option>
         <option value="sample">Sample (col) metadata</option>
       </select>
+      <label class="rp-label" for="rpField">Field</label>
       <select id="rpField"></select>
       <input id="rpFind" type="text" placeholder="Find…">
       <input id="rpReplace" type="text" placeholder="Replace with…">
