@@ -44,13 +44,18 @@ STYLE = """
         transition:border-top-color var(--dur) var(--ease)}
   body.mode-row #info{border-top-color:var(--row-meta)}
   body.mode-col #info{border-top-color:var(--col-meta)}
-  #info #filename{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;letter-spacing:-.01em}
+  /* min-width matters here, not just cosmetic: a flex item with
+     overflow:hidden has an automatic minimum size of 0 per spec, so
+     without a floor this collapses to a fully invisible 0px at narrow
+     window widths instead of truncating down to some readable minimum
+     (verified in the live preview harness at the app's own min_size). */
+  #info #filename{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;letter-spacing:-.01em;min-width:60px}
   .file-dir{color:var(--dim);font-weight:400}
   .file-base{color:var(--fg);font-weight:700}
-  #dims{flex-shrink:0;margin-left:10px;color:var(--dim);font-size:11.5px;font-family:ui-monospace,monospace;
+  #dims{flex-shrink:0;white-space:nowrap;margin-left:10px;color:var(--dim);font-size:11.5px;font-family:ui-monospace,monospace;
              background:var(--panel-bg);border:1px solid var(--border);border-radius:10px;padding:2px 8px}
   #info #toolbar{display:flex;align-items:center;gap:10px;flex-shrink:0}
-  #modeTag{display:none;font:700 10px/1 ui-monospace,monospace;padding:3px 7px;border-radius:10px;
+  #modeTag{display:none;white-space:nowrap;flex-shrink:0;font:700 10px/1 ui-monospace,monospace;padding:3px 7px;border-radius:10px;
            border:1px solid currentColor;letter-spacing:.03em;margin-left:8px}
   body.mode-row #modeTag{display:inline-block;color:var(--row-meta)}
   body.mode-col #modeTag{display:inline-block;color:var(--col-meta)}
@@ -106,7 +111,7 @@ STYLE = """
   button.nav:hover:not(:disabled),button.tool:hover{background:var(--hl);border-color:var(--sel-outline)}
   button.nav:active:not(:disabled),button.tool:active{transform:translateY(.5px)}
   button.nav:disabled{opacity:.35;cursor:default}
-  #viewsBtn{max-width:380px;flex-shrink:0;margin-left:10px}
+  #viewsBtn{max-width:380px;flex-shrink:0}
   .views-current-name{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
              max-width:340px;display:inline-block;vertical-align:bottom}
   .views-dirty-dot{color:var(--row-meta);font-size:8px;margin:0 1px;vertical-align:middle}
@@ -183,7 +188,11 @@ STYLE = """
   .fp-row .fp-count{color:var(--dim);font-family:ui-monospace,monospace;font-size:10.5px}
   .fp-buttons{display:flex;gap:4px}
   .fp-buttons button{flex:1}
-  #axisChips{display:none;gap:6px;padding:8px 14px;flex-wrap:wrap;background:var(--panel-bg);border-bottom:1px solid var(--border)}
+  /* Always visible now (not gated on chips.length) -- Views lives here as
+     the first item, and it needs to stay reachable even with zero other
+     chips, not disappear along with them. */
+  #axisChips{display:flex;align-items:flex-start;gap:6px;padding:8px 14px;background:var(--panel-bg);border-bottom:1px solid var(--border)}
+  #axisChipsList{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
   /* Deliberately neutral -- the icon per chip type (📌 ⇅ 🔽 ✏️ 🗑) already
      tells them apart, so a uniform accent color here wasn't conveying
      anything beyond "this app uses green a lot everywhere." */
@@ -222,7 +231,14 @@ STYLE = """
   .mv{color:var(--fg)}
   .mv-empty{color:var(--z-fg);font-style:italic}
   .cell:not(.rh):not(.colhdr):not(.stat-cell).hl-row,.cell:not(.rh):not(.colhdr):not(.stat-cell).hl-col{background:var(--hl) !important}
-  .rh.hl-row,.colhdr.hl-col{box-shadow:inset 0 0 0 2px var(--sel-outline);font-weight:700}
+  /* A plain click used to paint THREE equally-weighted 2px outline boxes
+     (the cell, its row header, its column header) -- competing for
+     attention instead of showing one clear focal point. Headers now only
+     go bold, keeping their own orange/row-meta or blue/col-meta identity
+     background intact, so .hl-cell's outline is the only "this is the
+     exact selection" signal left; bold text on the headers is just
+     "...and this is the row/column it's in" -- present but quieter. */
+  .rh.hl-row,.colhdr.hl-col{font-weight:700}
   /* When the column stats strip is showing, .colhdr (field/sample label)
      and the .stat-cell directly below it are two separate grid cells that
      read as one merged header block -- so their shared border must not

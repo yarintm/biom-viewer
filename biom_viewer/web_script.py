@@ -1260,7 +1260,13 @@ function headerContextItems(el){
     const filterOn = st.filters.some(f=>f.field===field);
     items.push({html: filterOn ? `🔽 Edit filter on ${name}…` : `🔽 Filter by ${name}…`,
       onClick: ()=>openFilterInput(axis, field, el)});
-    items.push({html: `✏️ Rename or delete ${name}…`, onClick: ()=>openFieldPopover(axis, field, el)});
+    items.push({html: `✏️ Rename ${name}…`, onClick: ()=>openFieldPopover(axis, field, el)});
+    // Deleting a field is already low-friction elsewhere in the app (a
+    // plain undoable mutation, same as sort/filter/pin -- see the "restore
+    // field" chip and ⌘Z), so this skips the popover and just does it,
+    // instead of routing through the same dialog as the very different
+    // rename flow (which needs text input).
+    items.push({html: `🗑 Delete ${name}`, onClick: ()=>deleteField(axis, field)});
   }
   if(el.dataset.ctxPinRaw !== undefined){
     const rawIdx = parseInt(el.dataset.ctxPinRaw, 10);
@@ -1378,7 +1384,6 @@ function undeleteField(axis, field){
 // axis) so each can be read and removed independently -- a single "3
 // filters" chip told you nothing about what was actually filtered.
 function renderAxisChips(){
-  const el = document.getElementById('axisChips');
   const chips = [];
   if(pinnedObs.size>0){
     chips.push(`<span class="chip">📌 ${pinnedObs.size} pinned` +
@@ -1414,11 +1419,11 @@ function renderAxisChips(){
   if(chips.length>1){
     chips.push(`<button class="chip chip-clear-all" title="Clear everything above">Clear all ✕</button>`);
   }
-  el.innerHTML = chips.join('');
-  el.style.display = chips.length ? 'flex' : 'none';
-  const clearAllBtn = el.querySelector('.chip-clear-all');
+  const list = document.getElementById('axisChipsList');
+  list.innerHTML = chips.join('');
+  const clearAllBtn = list.querySelector('.chip-clear-all');
   if(clearAllBtn) clearAllBtn.onclick = clearAllChips;
-  el.querySelectorAll('.chip-x').forEach(btn=>{
+  list.querySelectorAll('.chip-x').forEach(btn=>{
     const kind = btn.dataset.kind;
     if(kind==='sort') btn.onclick = ()=>removeSort(btn.dataset.axis);
     else if(kind==='replace') btn.onclick = ()=>removeReplacement(btn.dataset.axis, btn.dataset.field);
@@ -1967,7 +1972,13 @@ document.addEventListener('contextmenu', (e)=>{
   let html = headerItems.map((it, i)=>`<button class="ctx-item" data-hi="${i}">${it.html}</button>`).join('');
   if(text){
     if(headerItems.length) html += `<div class="ctx-sep"></div>`;
-    const short = text.length > 40 ? text.slice(0, 40) + '…' : text;
+    // Head-only truncation reads fine for prose but silently drops the
+    // identifying part of anything hierarchical (taxonomy strings, paths)
+    // -- same class of problem as the row-header/search-result truncation
+    // above, just without a search query to center on here. Middle
+    // truncation keeps both ends, which is what you actually need to
+    // confirm this is the right thing before searching it.
+    const short = text.length > 40 ? text.slice(0, 20) + '…' + text.slice(-17) : text;
     html += `<button class="ctx-item" data-search="1">🔍 Search Google for <code>${escapeHtml(short)}</code></button>`;
   }
   menu.innerHTML = html;

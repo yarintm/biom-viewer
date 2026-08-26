@@ -566,7 +566,6 @@ PAGE = """<!doctype html>
     <span id="filename">loading…</span>
     <span id="dims"></span>
     <span id="modeTag"></span>
-    <button class="tool" id="viewsBtn" title="Saved views">Views ▾</button>
   </span>
   <span id="toolbar">
     <span id="modeGroup">
@@ -581,7 +580,10 @@ PAGE = """<!doctype html>
     </span>
   </span>
 </div>
-<div id="axisChips"></div>
+<div id="axisChips">
+  <button class="tool" id="viewsBtn" title="Saved views">Views ▾</button>
+  <div id="axisChipsList"></div>
+</div>
 <div id="selectedWrap">
   <input id="selected" readonly value="Click a row, column, or cell to see its full text here (auto-copied to clipboard). Double-click a header to toggle summary stats.">
   <button class="tool" id="expandBtn" title="View full content in a window (⌘⏎)">⤢</button>
