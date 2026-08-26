@@ -1174,6 +1174,12 @@ function resolveAxisPosition(axis, rawIdx){
   if(!vis) return rawIdx;
   const pos = vis.indexOf(rawIdx);
   if(pos>=0) return pos;
+  // Only the "target was filtered out" branch below actually mutates
+  // axisState, so recordHistory() is guarded here rather than placed
+  // unconditionally at the top -- otherwise every ordinary jump-to (the
+  // common case, where pos>=0 above already returned) would push a
+  // spurious undo/autosave entry for a navigation that changed nothing.
+  recordHistory();
   axisState[axis].sortField = null;
   axisState[axis].sortDir = 0;
   axisState[axis].filters = [];
