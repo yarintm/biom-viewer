@@ -121,7 +121,11 @@ STYLE = """
   #searchPin{display:none}
   /* z-index has to clear #searchResults' own 20 -- they're siblings in the
      same stacking context, so the panel paints over anything below it. */
-  #searchWrap:has(#searchResults.open) #searchPin{position:absolute;z-index:21;
+  /* Keyed off .stabs, not .open: the panel is also "open" when it holds
+     just "No matches", and there is nothing to keep open then -- the pin
+     was floating over that one line of text. .stabs exists only when there
+     are results. */
+  #searchWrap:has(#searchResults.open .stabs) #searchPin{position:absolute;z-index:21;
              top:calc(100% + 11px);right:8px;display:flex;align-items:center;gap:4px;
              padding:3px 8px;font-size:11.5px;line-height:1.4;color:var(--dim);
              background:none;border:1px solid transparent}
