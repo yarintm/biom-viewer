@@ -742,7 +742,9 @@ PAGE = """<!doctype html>
   /* row axis (observation ids, leftmost column) orange; col axis (sample ids,
      top row) blue — in data mode both are on screen at once */
   body.mode-row .rh,body.mode-data .rh{background:var(--row-meta-bg);color:var(--row-meta);border-color:var(--row-meta);font-weight:700}
+  body.mode-row .rh:not(.hl-row),body.mode-data .rh:not(.hl-row){box-shadow:inset 3px 0 0 var(--row-meta)}
   body.mode-col .hdr.colhdr,body.mode-data .hdr.colhdr{background:var(--col-meta-bg);color:var(--col-meta);border-color:var(--col-meta);font-weight:700}
+  body.mode-col .hdr.colhdr:not(.hl-col),body.mode-data .hdr.colhdr:not(.hl-col){box-shadow:inset 0 -3px 0 var(--col-meta)}
   #replaceModal{width:420px;border-radius:var(--radius-lg)}
   #replaceModal header{justify-content:space-between}
   #replaceModal header h3{margin-right:0}
