@@ -575,7 +575,7 @@ PAGE = """<!doctype html>
     </span>
     <span id="searchWrap">
       <input id="searchBox" type="text" placeholder="Search…" autocomplete="off">
-      <button class="tool" id="searchPin" title="Keep search results open">📌</button>
+      <button class="tool" id="searchPin" title="Keep search results open while you click around the grid">📌<span>Keep open</span></button>
       <div id="searchResults"></div>
     </span>
   </span>
@@ -585,7 +585,11 @@ PAGE = """<!doctype html>
   <div id="axisChipsList"></div>
 </div>
 <div id="selectedWrap">
-  <input id="selected" readonly value="Click a row, column, or cell to see its full text here (auto-copied to clipboard). Double-click a header to toggle summary stats.">
+  <!-- The hint is a placeholder rather than a value so it can be styled as
+       the instructional prose it is (system font) while real selected
+       content still lands in the monospace value slot -- and so it comes
+       back on its own if the field is ever cleared. -->
+  <input id="selected" readonly placeholder="Click a row, column, or cell to see its full text here (auto-copied to clipboard). Double-click a header to toggle summary stats.">
   <button class="tool" id="expandBtn" title="View full content in a window (⌘⏎)">⤢</button>
 </div>
 

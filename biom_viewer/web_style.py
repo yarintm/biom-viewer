@@ -21,6 +21,11 @@ STYLE = """
     --cell-border:light-dark(#e6e6e4,#2c2c30); --hdr-bg:light-dark(#eeeeec,#242427);
     --hdr-fg:light-dark(#3a3a3d,#b8b8bd);
     --nz-bg:light-dark(#c9ecd9,#1f4636); --z-fg:light-dark(#86868b,#7c7c82);
+    /* Search matches used to be painted in --nz-bg, i.e. the exact green
+       that means "this matrix cell is non-zero" everywhere else on screen.
+       Find-highlighting has its own near-universal colour and no competing
+       meaning in this app, so it gets its own token. */
+    --match-bg:light-dark(#ffe9a3,#6b5410); --match-fg:light-dark(#3d2f00,#ffe9a3);
     --hl:light-dark(#d7f2e3,#26493a); --sel-outline:var(--accent);
     /* Same tint at roughly a third of the strength, for the one place a
        selection has to paint an unusually large area (see
@@ -76,16 +81,31 @@ STYLE = """
              border:1px solid var(--input-border);border-radius:var(--radius-sm);padding:5px 9px;font-size:12.5px;outline:none;
              transition:border-color var(--dur) var(--ease)}
   #searchBox:focus{border-color:var(--sel-outline)}
-  #searchPin,#searchPin:hover{border-color:transparent}
-  #searchPin{padding:4px 6px;font-size:13px;opacity:.4;background:none}
-  #searchPin:hover{opacity:.75;background:var(--hl)}
-  #searchPin.on{opacity:1;background:var(--hl)}
+  /* The pin only means anything while results are on screen. Parked in the
+     toolbar as a bare 40%-opacity emoji it was the least legible control in
+     the app -- unlabelled, and at that opacity it read as *disabled* rather
+     than "off" (relying on opacity alone to signal state is exactly what
+     accessibility guidance warns against). Docked into the results panel's
+     tab strip with a word next to it, it appears when it's relevant and
+     says what it does. */
+  #searchPin{display:none}
+  /* z-index has to clear #searchResults' own 20 -- they're siblings in the
+     same stacking context, so the panel paints over anything below it. */
+  #searchWrap:has(#searchResults.open) #searchPin{position:absolute;z-index:21;
+             top:calc(100% + 11px);right:8px;display:flex;align-items:center;gap:4px;
+             padding:3px 8px;font-size:11.5px;line-height:1.4;color:var(--dim);
+             background:none;border:1px solid transparent}
+  #searchWrap #searchPin:hover{color:var(--fg);background:var(--hl)}
+  #searchWrap #searchPin.on{color:var(--fg);background:var(--hl);border-color:var(--sel-outline)}
   #searchResults{position:absolute;top:calc(100% + 6px);right:0;width:420px;max-height:60vh;overflow-y:auto;
              background:var(--panel-raised);border:1px solid var(--border);border-radius:var(--radius-md);
              box-shadow:var(--shadow-md);display:none;z-index:20}
   #searchResults.open{display:block}
-  #searchResults.pinned{outline:2px solid var(--accent);outline-offset:2px}
-  .stabs{position:sticky;top:0;z-index:1;display:flex;gap:2px;padding:5px 6px;overflow-x:auto;
+  /* Pinned state used to be an accent outline around the whole panel --
+     the same 2px accent box the grid uses for "this is the selected cell",
+     meaning two unrelated things in one screen. The toggle's own on-state
+     carries it now. */
+  .stabs{position:sticky;top:0;z-index:1;display:flex;gap:2px;padding:5px 96px 5px 6px;overflow-x:auto;
              background:var(--panel-raised);border-bottom:1px solid var(--border)}
   .stabs::-webkit-scrollbar{display:none}
   .stab{flex:0 0 auto;padding:3px 8px;border-radius:var(--radius-sm);font-size:11.5px;color:var(--dim);
@@ -99,7 +119,7 @@ STYLE = """
   .sr{padding:5px 10px;font-size:12.5px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .sr:hover,.sr.hi{background:var(--hl)}
   .sr .sr-field{color:var(--dim)}
-  .sr mark{background:var(--nz-bg);color:inherit;border-radius:2px;padding:0 1px;font-weight:700}
+  .sr mark{background:var(--match-bg);color:var(--match-fg);border-radius:2px;padding:0 1px;font-weight:700}
   .sr-more{padding:3px 10px;font-size:11px;color:var(--dim);font-style:italic}
   .sr-more[data-tab]{cursor:pointer;text-decoration:underline}
   .sr-more[data-tab]:hover{color:var(--fg)}
@@ -110,6 +130,7 @@ STYLE = """
              border:1px solid transparent;border-radius:5px;font-family:ui-monospace,monospace;outline:none;
              caret-color:transparent;transition:color .15s}
   #selected.flash{color:var(--fg)}
+  #selected::placeholder{font:12.5px -apple-system,BlinkMacSystemFont,sans-serif;color:var(--dim);opacity:1}
   #expandBtn{flex:none;margin-right:3px}
   button.nav,button.tool{background:var(--panel-bg);color:var(--fg);border:1px solid var(--input-border);border-radius:var(--radius-sm);padding:4px 10px;cursor:pointer;
              font-size:14px;line-height:1;transition:background var(--dur) var(--ease),border-color var(--dur) var(--ease)}

@@ -745,16 +745,21 @@ function renderSearchPanel(){
     return;
   }
 
-  let html = `<div class="stabs"><div class="stab${searchTab==='all'?' active':''}" data-tab="all">All<span class="n">${total}</span></div>`;
+  // With only one kind of match, "All 14" / "Taxa 14" / a "TAXA" group
+  // caption are three labels for the same fourteen rows, and the tab pair
+  // offers a choice between two identical lists. Collapse to one label.
+  const soleGroup = live.length===1;
+  let html = `<div class="stabs">`;
+  if(!soleGroup) html += `<div class="stab${searchTab==='all'?' active':''}" data-tab="all">All<span class="n">${total}</span></div>`;
   live.forEach(([k,cap])=>{
-    html += `<div class="stab${searchTab===k?' active':''}" data-tab="${k}">${cap}<span class="n">${searchGroups[k].length}</span></div>`;
+    html += `<div class="stab${(soleGroup||searchTab===k)?' active':''}" data-tab="${k}">${cap}<span class="n">${searchGroups[k].length}</span></div>`;
   });
   html += `</div>`;
 
   const group = (k, cap, limit, moreTab)=>{
     const matches = searchGroups[k];
     if(!matches.length) return '';
-    let h = `<div class="sg"><div class="sg-cap">${cap}</div>`;
+    let h = `<div class="sg">` + (cap ? `<div class="sg-cap">${cap}</div>` : '');
     matches.slice(0, limit).forEach(e=>{
       h += `<div class="sr" data-i="${searchFlat.length}">${searchRowHtml(e)}</div>`;
       searchFlat.push(e);
@@ -766,7 +771,12 @@ function renderSearchPanel(){
     return h + `</div>`;
   };
 
-  html += searchTab==='all'
+  // soleGroup gets TAB_CAP, not ALL_CAP: ALL_CAP's shorter list relies on a
+  // "show all" tab to expand it, and with one group there is no second tab
+  // to switch to -- capping at 6 with no way past it would be a dead end.
+  html += soleGroup
+    ? group(live[0][0], '', TAB_CAP, false)
+    : searchTab==='all'
     ? live.map(([k,cap])=>group(k, cap, ALL_CAP, true)).join('')
     : group(searchTab, SEARCH_KINDS.find(([k])=>k===searchTab)[1], TAB_CAP, false);
 
@@ -2235,7 +2245,7 @@ const searchPin = document.getElementById('searchPin');
 searchPin.onclick = ()=>{
   searchPinned = !searchPinned;
   searchPin.classList.toggle('on', searchPinned);
-  document.getElementById('searchResults').classList.toggle('pinned', searchPinned);
+  searchPin.querySelector('span').textContent = searchPinned ? 'Pinned' : 'Keep open';
   if(searchPinned && searchBox.value.trim()) runSearch(searchBox.value);
 };
 searchBox.addEventListener('input', ()=>{
@@ -2261,6 +2271,7 @@ searchBox.addEventListener('keydown', (e)=>{
     // a pinned-but-hidden panel that won't reopen on the next focus.
     searchPinned = false;
     searchPin.classList.remove('on');
+    searchPin.querySelector('span').textContent = 'Keep open';
     results.classList.remove('open', 'pinned');
     searchBox.blur();
   }
