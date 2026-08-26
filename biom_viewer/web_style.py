@@ -164,6 +164,9 @@ STYLE = """
              width:16px;height:16px;border-radius:50%;line-height:1;display:inline-flex;
              align-items:center;justify-content:center;transition:background var(--dur) var(--ease),color var(--dur) var(--ease)}
   .chip-x:hover{color:var(--danger);background:var(--panel-raised)}
+  .chip-clear-all{background:none;color:var(--dim);border-style:dashed;border-color:var(--input-border);
+             font-weight:600;cursor:pointer;padding:4px 10px;box-shadow:none}
+  .chip-clear-all:hover{color:var(--danger);border-color:var(--danger);background:var(--panel-raised)}
   #viewsPopover{position:fixed;z-index:30;padding:7px;display:flex;flex-direction:column;gap:4px;width:220px}
   .views-list{display:flex;flex-direction:column;gap:2px;max-height:260px;overflow-y:auto}
   .views-empty{color:var(--dim);font-size:12px;padding:4px 6px}

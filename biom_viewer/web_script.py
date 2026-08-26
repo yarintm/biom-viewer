@@ -1218,9 +1218,9 @@ function headerContextItems(el){
       : st.sortDir===1 ? `⇅ Sort by ${name} (descending)` : `⇅ Clear sort on ${name}`;
     items.push({html: sortHtml, onClick: ()=>cycleSort(axis, field)});
     const filterOn = st.filters.some(f=>f.field===field);
-    items.push({html: filterOn ? `⏷ Edit filter on ${name}…` : `⏷ Filter by ${name}…`,
+    items.push({html: filterOn ? `🔽 Edit filter on ${name}…` : `🔽 Filter by ${name}…`,
       onClick: ()=>openFilterInput(axis, field, el)});
-    items.push({html: `✎ Rename or delete ${name}…`, onClick: ()=>openFieldPopover(axis, field, el)});
+    items.push({html: `✏️ Rename or delete ${name}…`, onClick: ()=>openFieldPopover(axis, field, el)});
   }
   if(el.dataset.ctxPinRaw !== undefined){
     const rawIdx = parseInt(el.dataset.ctxPinRaw, 10);
@@ -1355,7 +1355,7 @@ function renderAxisChips(){
         `<button class="chip-x" data-kind="sort" data-axis="${axis}" title="Clear sort">✕</button></span>`);
     }
     st.filters.forEach(f=>{
-      chips.push(`<span class="chip">⏷ ${axis}: ${escapeHtml(filterChipLabel(axis, f))}` +
+      chips.push(`<span class="chip">🔽 ${axis}: ${escapeHtml(filterChipLabel(axis, f))}` +
         `<button class="chip-x" data-kind="filter" data-axis="${axis}" data-field="${escapeHtml(f.field)}" title="Remove filter">✕</button></span>`);
     });
     st.replacements.forEach(r=>{
@@ -1363,7 +1363,7 @@ function renderAxisChips(){
         `<button class="chip-x" data-kind="replace" data-axis="${axis}" data-field="${escapeHtml(r.field)}" title="Undo replacement">✕</button></span>`);
     });
     Object.entries(st.renames).forEach(([orig, newName])=>{
-      chips.push(`<span class="chip">✎ ${axis}: <code>${escapeHtml(orig)}</code> → <code>${escapeHtml(newName)}</code>` +
+      chips.push(`<span class="chip">✏️ ${axis}: <code>${escapeHtml(orig)}</code> → <code>${escapeHtml(newName)}</code>` +
         `<button class="chip-x" data-kind="unrename" data-axis="${axis}" data-field="${escapeHtml(orig)}" title="Undo rename">✕</button></span>`);
     });
     st.deletedFields.forEach(f=>{
@@ -1371,8 +1371,13 @@ function renderAxisChips(){
         `<button class="chip-x" data-kind="undelete" data-axis="${axis}" data-field="${escapeHtml(f)}" title="Restore field">✕</button></span>`);
     });
   });
+  if(chips.length>1){
+    chips.push(`<button class="chip chip-clear-all" title="Clear everything above">Clear all ✕</button>`);
+  }
   el.innerHTML = chips.join('');
   el.style.display = chips.length ? 'flex' : 'none';
+  const clearAllBtn = el.querySelector('.chip-clear-all');
+  if(clearAllBtn) clearAllBtn.onclick = clearAllChips;
   el.querySelectorAll('.chip-x').forEach(btn=>{
     const kind = btn.dataset.kind;
     if(kind==='sort') btn.onclick = ()=>removeSort(btn.dataset.axis);
@@ -1396,6 +1401,25 @@ function renderAxisChips(){
     };
     else btn.onclick = ()=>removeFilter(btn.dataset.axis, btn.dataset.field);
   });
+}
+
+// One undo step for the whole chips row -- individual chip removers each
+// call recordHistory() per action, but a bulk clear should collapse to a
+// single ctrl-Z, not one undo per chip.
+function clearAllChips(){
+  recordHistory();
+  axisState.observation = { sortField: null, sortDir: 0, filters: [], replacements: [], renames: {}, deletedFields: [] };
+  axisState.sample = { sortField: null, sortDir: 0, filters: [], replacements: [], renames: {}, deletedFields: [] };
+  pinnedObs.clear();
+  pinnedColFields.clear();
+  selPinnedRaw = null;
+  selPinnedField = null;
+  recomputeVisible('observation');
+  recomputeVisible('sample');
+  rowPage = 0; colPage = 0;
+  scheduleAutosave();
+  render();
+  renderAxisChips();
 }
 
 // Generates illustrative pandas/biom-format code reproducing the current
