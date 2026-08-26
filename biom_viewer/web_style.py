@@ -203,7 +203,11 @@ STYLE = """
   #filterPopover,#ctxMenu,#viewsPopover,#confirmPopover{background:var(--panel-raised);border:1px solid var(--border);
              box-shadow:var(--shadow-md);border-radius:var(--radius-md)}
   #filterPopover{position:fixed;z-index:30;padding:7px;display:flex;gap:4px;align-items:center}
-  #filterPopover input{width:70px;box-sizing:border-box;background:var(--input-bg);color:var(--fg);
+  /* :not([type=checkbox]) -- this 70px is for the numeric min/max fields,
+     but it was also hitting the checklist's checkboxes, padding each one
+     into a 70px box and stranding every value label half an inch away from
+     the box that ticks it. */
+  #filterPopover input:not([type=checkbox]){width:70px;box-sizing:border-box;background:var(--input-bg);color:var(--fg);
              border:1px solid var(--input-border);border-radius:5px;padding:3px 6px;font-size:12px}
   #filterPopover button,.fp-buttons button,.confirm-buttons button,.views-save-btn{
              background:var(--panel-bg);color:var(--fg);border:1px solid var(--input-border);
@@ -228,6 +232,13 @@ STYLE = """
   .fp-row .fp-count{color:var(--dim);font-family:ui-monospace,monospace;font-size:10.5px}
   .fp-buttons{display:flex;gap:4px}
   .fp-buttons button{flex:1}
+  .fp-title{font-size:11.5px;color:var(--dim);padding:1px 2px 3px}
+  .fp-title b{color:var(--fg)}
+  /* The one action the popover exists to perform reads as the default:
+     everything else in it (All/None/Clear/the search box) is a way of
+     setting up the state that Apply commits. */
+  #filterPopover .fp-apply{background:var(--accent);color:var(--bg);border-color:var(--accent);font-weight:600}
+  #filterPopover .fp-apply:hover{filter:brightness(1.08);background:var(--accent)}
   /* Always visible now (not gated on chips.length) -- Views lives here as
      the first item, and it needs to stay reachable even with zero other
      chips, not disappear along with them. */

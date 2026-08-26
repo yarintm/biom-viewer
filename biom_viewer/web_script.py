@@ -534,6 +534,29 @@ function distinctValues(axis, field){
   });
   return [...counts.values()].sort((a,b)=> b.count-a.count || a.label.localeCompare(b.label));
 }
+// Observed range of a numeric field, for the filter popover's placeholders.
+// Same present-value rules as fieldIsNumeric so the two agree on what counts.
+function numericBounds(axis, field){
+  const entries = axis==='observation' ? meta.row_metadata : meta.col_metadata;
+  let lo = Infinity, hi = -Infinity;
+  (entries||[]).forEach(e=>{
+    const v = e && e[field];
+    if(v===null || v===undefined || v==='') return;
+    if(typeof v==='string' && MISSING_TOKENS.has(v.trim().toLowerCase())) return;
+    const n = Number(v);
+    if(!isFinite(n)) return;
+    if(n<lo) lo=n;
+    if(n>hi) hi=n;
+  });
+  return lo<=hi ? {lo, hi} : null;
+}
+// Placeholders have to stay inside a 70px box, so long decimals get trimmed
+// -- they're a hint about scale, not a value to be read off precisely.
+function fmtBound(n){
+  if(Number.isInteger(n)) return String(n);
+  const a = Math.abs(n);
+  return a>=100 ? n.toFixed(0) : a>=1 ? n.toFixed(1) : n.toFixed(3);
+}
 function fieldIsNumeric(axis, field){
   const entries = axis==='observation' ? meta.row_metadata : meta.col_metadata;
   const present = (entries||[]).map(e=>e && e[field])
@@ -1703,8 +1726,14 @@ function openFilterInput(axis, field, anchorEl){
   pop.style.top = (rect.bottom + 4) + 'px';
 
   if(numeric){
-    pop.innerHTML = `<input class="fp-min" type="number" placeholder="min" value="${existing?existing.min ?? '':''}">` +
-      `<input class="fp-max" type="number" placeholder="max" value="${existing?existing.max ?? '':''}">` +
+    // "min" / "max" as placeholders told you the shape of the input and
+    // nothing about the data -- you had to go read the field summary to
+    // find out whether 50 was a low cutoff or above every value in the
+    // column. The metadata is already in the page, so the real bounds cost
+    // one pass and turn the two boxes into a description of the field.
+    const bounds = numericBounds(axis, field);
+    pop.innerHTML = `<input class="fp-min" type="number" placeholder="${bounds ? fmtBound(bounds.lo) : 'min'}" value="${existing?existing.min ?? '':''}">` +
+      `<input class="fp-max" type="number" placeholder="${bounds ? fmtBound(bounds.hi) : 'max'}" value="${existing?existing.max ?? '':''}">` +
       `<button class="fp-apply">Apply</button>` +
       (existing ? `<button class="fp-clear">Clear</button>` : '');
     document.body.appendChild(pop);
@@ -1717,7 +1746,11 @@ function openFilterInput(axis, field, anchorEl){
       `<label class="fp-row"><input type="checkbox" class="fp-check" value="${escapeHtml(v.key)}" ${excluded.has(v.key) ? '' : 'checked'}>` +
       `<span class="fp-val">${escapeHtml(v.label)}</span><span class="fp-count">${v.count}</span></label>`
     ).join('');
+    // The checklist can be tall enough to bury its anchor, and it can be
+    // reopened from a chip far from the header it came from -- so it has to
+    // name the field it is about rather than leaving you to infer it.
     pop.innerHTML =
+      `<div class="fp-title">Filter <b>${escapeHtml(fieldDisplay(axis, field))}</b></div>` +
       `<input class="fp-search" type="text" placeholder="Search values…">` +
       `<div class="fp-actions"><button class="fp-all">All</button><button class="fp-none">None</button></div>` +
       `<div class="fp-list">${rows}</div>` +
