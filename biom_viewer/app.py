@@ -688,6 +688,31 @@ PAGE = """<!doctype html>
              border-radius:10px;padding:3px 8px;font-size:11.5px}
   .chip-x{background:none;border:none;color:var(--dim);cursor:pointer;font-size:10px;padding:0;line-height:1}
   .chip-x:hover{color:var(--fg)}
+  #viewsPopover{position:fixed;z-index:30;background:var(--panel-bg);border:1px solid var(--border);
+    border-radius:6px;padding:6px;display:flex;flex-direction:column;gap:4px;width:220px;
+    box-shadow:0 4px 14px rgba(0,0,0,.25)}
+  .views-list{display:flex;flex-direction:column;gap:2px;max-height:260px;overflow-y:auto}
+  .views-empty{color:var(--dim);font-size:12px;padding:4px 6px}
+  .views-row{display:flex;align-items:center;gap:6px;padding:4px 6px;border-radius:4px;cursor:pointer}
+  .views-row:hover{background:var(--hl)}
+  .views-row.active{background:var(--hl);font-weight:700}
+  .views-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}
+  .views-x{background:none;border:none;color:var(--dim);cursor:pointer;font-size:10px;padding:0;line-height:1}
+  .views-x:hover{color:var(--danger)}
+  .views-save{display:flex;gap:4px;border-top:1px solid var(--border);padding-top:6px}
+  .views-save-input,.views-rename-input{flex:1;box-sizing:border-box;background:var(--input-bg);color:var(--fg);
+    border:1px solid var(--input-border);border-radius:4px;padding:3px 6px;font-size:12px}
+  .views-rename-input.error{border-color:var(--danger)}
+  .views-save-btn{background:var(--panel-bg);color:var(--fg);border:1px solid var(--input-border);
+    border-radius:4px;padding:3px 8px;cursor:pointer;font-size:12px}
+  #confirmPopover{position:fixed;z-index:40;left:50%;top:40%;transform:translate(-50%,-50%);
+    background:var(--panel-bg);border:1px solid var(--border);border-radius:6px;padding:14px;
+    display:flex;flex-direction:column;gap:10px;box-shadow:0 4px 14px rgba(0,0,0,.3)}
+  .confirm-msg{font-size:13px}
+  .confirm-buttons{display:flex;gap:6px;justify-content:flex-end}
+  .confirm-buttons button{background:var(--panel-bg);color:var(--fg);border:1px solid var(--input-border);
+    border-radius:4px;padding:4px 10px;cursor:pointer;font-size:12px}
+  .confirm-discard{border-color:var(--danger)!important;color:var(--danger)}
   .z{color:var(--z-fg)}
   .nz{background:var(--nz-bg)}
   .mv{color:var(--fg)}
@@ -794,6 +819,7 @@ PAGE = """<!doctype html>
       <button data-m="row">Row metadata</button>
       <button data-m="col">Col metadata</button>
     </span>
+    <button class="tool" id="viewsBtn" title="Saved views">Views ▾</button>
     <span id="searchWrap">
       <input id="searchBox" type="text" placeholder="Search…" autocomplete="off">
       <button class="tool" id="searchPin" title="Keep search results open">📌</button>
@@ -1120,8 +1146,12 @@ function captureViewState(){
     axisState: JSON.parse(JSON.stringify(axisState)),
     rowFields: rowFields.slice(),
     colFields: colFields.slice(),
-    pinnedObs: [...pinnedObs],
-    pinnedColFields: [...pinnedColFields],
+    // Sorted, not insertion order -- Set iteration order depends on
+    // pin/unpin history, not membership, and viewStatesEqual's JSON.stringify
+    // compare would otherwise false-negative on two sets with identical
+    // members but different pin order (unpin+repin vs. never-touched).
+    pinnedObs: [...pinnedObs].sort((a,b)=>a-b),
+    pinnedColFields: [...pinnedColFields].sort(),
   };
 }
 
@@ -1145,7 +1175,7 @@ function applyViewState(vs){
 // any JSON.stringify equality check, or every comparison would false-negative.
 function viewStatePayload(v){
   return {mode: v.mode, axisState: v.axisState, rowFields: v.rowFields, colFields: v.colFields,
-    pinnedObs: v.pinnedObs, pinnedColFields: v.pinnedColFields};
+    pinnedObs: [...v.pinnedObs].sort((a,b)=>a-b), pinnedColFields: [...v.pinnedColFields].sort()};
 }
 
 function viewStatesEqual(a, b){
@@ -2503,7 +2533,133 @@ function openFieldPopover(axis, field, anchorEl){
 document.addEventListener('click', (e)=>{
   const pop = document.getElementById('filterPopover');
   if(pop && !pop.contains(e.target) && !e.target.closest('.axis-filter') && !e.target.closest('.axis-edit')) closeFilterPopover();
+  const viewsPop = document.getElementById('viewsPopover');
+  if(viewsPop && !viewsPop.contains(e.target) && e.target!==viewsBtn) closeViewsPopover();
 });
+
+function closeViewsPopover(){
+  const existing = document.getElementById('viewsPopover');
+  if(existing) existing.remove();
+  return !!existing;
+}
+
+function viewRowHtml(view){
+  const activeClass = lastAppliedViewName===view.name ? ' active' : '';
+  return `<div class="views-row${activeClass}" data-name="${escapeHtml(view.name)}">` +
+    `<span class="views-name">${escapeHtml(view.name)}</span>` +
+    `<button class="views-x" title="Delete">✕</button></div>`;
+}
+
+function openViewsPopover(){
+  closeFilterPopover();
+  closeViewsPopover();
+  const pop = document.createElement('div');
+  pop.id = 'viewsPopover';
+  const rect = viewsBtn.getBoundingClientRect();
+  pop.style.left = rect.left + 'px';
+  pop.style.top = (rect.bottom + 4) + 'px';
+  const rows = savedViews.length
+    ? savedViews.map(viewRowHtml).join('')
+    : `<div class="views-empty">No saved views yet</div>`;
+  pop.innerHTML = `<div class="views-list">${rows}</div>` +
+    `<div class="views-save"><input class="views-save-input" type="text" placeholder="Save current as…">` +
+    `<button class="views-save-btn">Save</button></div>`;
+  document.body.appendChild(pop);
+  wireViewsPopover(pop);
+}
+
+function wireViewsPopover(pop){
+  pop.querySelectorAll('.views-row').forEach(row=>{
+    const name = row.dataset.name;
+    row.querySelector('.views-name').addEventListener('click', ()=> switchToView(name));
+    row.querySelector('.views-name').addEventListener('dblclick', (e)=>{ e.stopPropagation(); startRenameView(row, name); });
+    row.querySelector('.views-x').addEventListener('click', (e)=>{ e.stopPropagation(); deleteView(name); });
+  });
+  const saveInput = pop.querySelector('.views-save-input');
+  const saveBtn = pop.querySelector('.views-save-btn');
+  const doSave = ()=> saveCurrentAsView(saveInput.value.trim());
+  saveBtn.onclick = doSave;
+  saveInput.addEventListener('keydown', e=>{ if(e.key==='Enter') doSave(); if(e.key==='Escape') closeViewsPopover(); });
+}
+
+async function refreshSavedViews(){
+  const workspace = await window.pywebview.api.load_workspace();
+  savedViews = workspace.views;
+}
+
+async function saveCurrentAsView(name){
+  if(!name) return;
+  await window.pywebview.api.save_view(name, captureViewState());
+  await refreshSavedViews();
+  lastAppliedViewName = name;
+  closeViewsPopover();
+}
+
+async function deleteView(name){
+  await window.pywebview.api.delete_view(name);
+  if(lastAppliedViewName===name) lastAppliedViewName = null;
+  await refreshSavedViews();
+  openViewsPopover();
+}
+
+function startRenameView(row, oldName){
+  row.innerHTML = `<input class="views-rename-input" type="text" value="${escapeHtml(oldName)}">`;
+  const input = row.querySelector('.views-rename-input');
+  input.focus();
+  input.select();
+  const commit = async ()=>{
+    const newName = input.value.trim();
+    if(!newName || newName===oldName){ openViewsPopover(); return; }
+    const result = await window.pywebview.api.rename_view(oldName, newName);
+    if(!result.ok){ input.classList.add('error'); input.title = 'Name already taken'; return; }
+    if(lastAppliedViewName===oldName) lastAppliedViewName = newName;
+    await refreshSavedViews();
+    openViewsPopover();
+  };
+  input.addEventListener('keydown', e=>{ if(e.key==='Enter') commit(); if(e.key==='Escape') openViewsPopover(); });
+  input.addEventListener('blur', commit);
+}
+
+function applyView(view, name){
+  // recordHistory() only captures the undo snapshot's existing shape
+  // (axisState/rowFields/colFields) -- mode and pins are already deliberately
+  // outside undo history everywhere else in this app (see pinnedObs's own
+  // comment), so ⌘Z after a switch reverts filters/sort but leaves the
+  // switched-to view's mode/pins in place. Same partial coverage undo
+  // already has for a plain pin toggle, not a new gap.
+  recordHistory();
+  applyViewState(view);
+  lastAppliedViewName = name;
+  lastLoadedViewState = captureViewState();
+  closeViewsPopover();
+  render();
+  renderAxisChips();
+}
+
+function confirmDiscardCurrent(onConfirm){
+  closeFilterPopover();
+  closeViewsPopover();
+  const pop = document.createElement('div');
+  pop.id = 'confirmPopover';
+  pop.innerHTML = `<div class="confirm-msg">Discard current filters?</div>` +
+    `<div class="confirm-buttons"><button class="confirm-discard">Discard</button><button class="confirm-cancel">Cancel</button></div>`;
+  document.body.appendChild(pop);
+  pop.querySelector('.confirm-discard').onclick = ()=>{ pop.remove(); onConfirm(); };
+  pop.querySelector('.confirm-cancel').onclick = ()=>{ pop.remove(); };
+}
+
+async function switchToView(name){
+  const view = savedViews.find(v => v.name===name);
+  if(!view) return;
+  const current = captureViewState();
+  const matchesSaved = savedViews.some(v => viewStatesEqual(current, viewStatePayload(v)));
+  const dirty = !viewStatesEqual(current, lastLoadedViewState) && !matchesSaved;
+  if(dirty){ confirmDiscardCurrent(()=> applyView(view, name)); return; }
+  applyView(view, name);
+}
+
+const viewsBtn = document.getElementById('viewsBtn');
+viewsBtn.onclick = ()=> openViewsPopover();
 
 document.getElementById('grid').addEventListener('click', (e)=>{
   const sortBtn = e.target.closest('.axis-sort');
