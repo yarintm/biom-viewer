@@ -309,7 +309,15 @@ STYLE = """
   .views-rename-input.error{border-color:var(--danger)}
   #confirmPopover{position:fixed;z-index:40;left:50%;top:40%;transform:translate(-50%,-50%);padding:14px;
     display:flex;flex-direction:column;gap:10px}
-  .confirm-msg{font-size:13px}
+  /* A dimming layer, so a question about losing work reads as a decision
+     that blocks rather than as a note floating over a still-live grid. It
+     has to be a sibling, not a ::before on the dialog: #confirmPopover is
+     centred with a transform, and a transformed element becomes the
+     containing block for its own position:fixed descendants -- an
+     inset:0 child would have covered the dialog and nothing else. */
+  #confirmBackdrop{position:fixed;inset:0;z-index:39;
+             background:light-dark(rgba(0,0,0,.18),rgba(0,0,0,.45))}
+  .confirm-msg{font-size:13px;max-width:320px}
   .confirm-buttons{display:flex;gap:6px;justify-content:flex-end}
   .confirm-discard{border-color:var(--danger)!important;color:var(--danger)}
   /* flex:1 so it claims the height #main would otherwise leave empty --

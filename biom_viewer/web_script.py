@@ -1931,6 +1931,10 @@ function viewRowHtml(view){
 function openViewsPopover(){
   closeFilterPopover();
   closeViewsPopover();
+  // A pending "discard your filters?" is about a view switch that started
+  // here -- reopening this list means you went back on it, so the question
+  // is moot and should not be left hanging over the page.
+  closeConfirmPopover();
   const pop = document.createElement('div');
   pop.id = 'viewsPopover';
   const rect = viewsBtn.getBoundingClientRect();
@@ -2059,20 +2063,32 @@ function applyView(view, name){
 function closeConfirmPopover(){
   const existing = document.getElementById('confirmPopover');
   if(existing) existing.remove();
+  const backdrop = document.getElementById('confirmBackdrop');
+  if(backdrop) backdrop.remove();
   return !!existing;
 }
 
-function confirmDiscardCurrent(onConfirm){
+// `dest` names where the discard is taking you, if anywhere. "Discard
+// current filters?" on its own asks you to weigh a loss against a benefit
+// it declines to mention.
+function confirmDiscardCurrent(onConfirm, dest){
   closeFilterPopover();
   closeViewsPopover();
   closeConfirmPopover();
   const pop = document.createElement('div');
   pop.id = 'confirmPopover';
-  pop.innerHTML = `<div class="confirm-msg">Discard current filters?</div>` +
+  pop.innerHTML = `<div class="confirm-msg">Discard current filters` +
+    (dest ? ` and switch to “${escapeHtml(dest)}”` : '') + `?</div>` +
     `<div class="confirm-buttons"><button class="confirm-discard">Discard</button><button class="confirm-cancel">Cancel</button></div>`;
+  const backdrop = document.createElement('div');
+  backdrop.id = 'confirmBackdrop';
+  // Clicking away is the same answer as Cancel -- the safe one. It must not
+  // be the same as dismissing the question and losing the filters anyway.
+  backdrop.onclick = closeConfirmPopover;
+  document.body.appendChild(backdrop);
   document.body.appendChild(pop);
-  pop.querySelector('.confirm-discard').onclick = ()=>{ pop.remove(); onConfirm(); };
-  pop.querySelector('.confirm-cancel').onclick = ()=>{ pop.remove(); };
+  pop.querySelector('.confirm-discard').onclick = ()=>{ closeConfirmPopover(); onConfirm(); };
+  pop.querySelector('.confirm-cancel').onclick = closeConfirmPopover;
 }
 
 async function switchToView(name){
@@ -2081,7 +2097,7 @@ async function switchToView(name){
   const current = captureViewState();
   const matchesSaved = savedViews.some(v => viewStatesEqual(current, viewStatePayload(v)));
   const dirty = !viewStatesEqual(current, lastLoadedViewState) && !matchesSaved;
-  if(dirty){ confirmDiscardCurrent(()=> applyView(view, name)); return; }
+  if(dirty){ confirmDiscardCurrent(()=> applyView(view, name), name); return; }
   applyView(view, name);
 }
 
