@@ -575,10 +575,10 @@ PAGE = """<!doctype html>
     --shadow-md:light-dark(0 8px 24px rgba(0,0,0,.12),0 8px 28px rgba(0,0,0,.55));
     --shadow-lg:light-dark(0 20px 48px rgba(0,0,0,.18),0 20px 56px rgba(0,0,0,.6));
     --ease:cubic-bezier(.2,.8,.2,1); --dur:.14s;
-    --row-meta:light-dark(#c1670f,#e6a85c); --row-meta-bg:light-dark(#fbe4c6,#3d2c18);
-    --row-meta-fg:light-dark(#5a3410,#f2d6ad);
-    --col-meta:light-dark(#1f5fc4,#7bb0f0); --col-meta-bg:light-dark(#dbe9fb,#1c2c44);
-    --col-meta-fg:light-dark(#123a76,#cfe3fb);
+    --row-meta:light-dark(#b3590a,#f0b578); --row-meta-bg:light-dark(#f7d3a2,#4a3216);
+    --row-meta-fg:light-dark(#4a2a08,#2a1608);
+    --col-meta:light-dark(#0d4fb0,#8fc0ff); --col-meta-bg:light-dark(#bcdaff,#1e3455);
+    --col-meta-fg:light-dark(#0a2c5e,#eaf3ff);
     --danger:light-dark(#c3392b,#ff7a70);
   }
   [data-theme="light"]{ color-scheme: light }
@@ -589,7 +589,10 @@ PAGE = """<!doctype html>
   button,input,select{font-family:inherit}
   button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--sel-outline);outline-offset:1px}
   #info{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 14px;
-        background:var(--hdr-bg);border-bottom:1px solid var(--border)}
+        background:var(--hdr-bg);border-bottom:1px solid var(--border);border-top:3px solid var(--accent);
+        transition:border-top-color var(--dur) var(--ease)}
+  body.mode-row #info{border-top-color:var(--row-meta)}
+  body.mode-col #info{border-top-color:var(--col-meta)}
   #info #filename{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600;letter-spacing:-.01em}
   #info #toolbar{display:flex;align-items:center;gap:10px;flex-shrink:0}
   #modeTag{display:none;font:700 10px/1 ui-monospace,monospace;padding:3px 7px;border-radius:10px;
@@ -738,8 +741,8 @@ PAGE = """<!doctype html>
   .hl-cell{outline:2px solid var(--sel-outline);outline-offset:-2px;position:relative;z-index:1}
   /* row axis (observation ids, leftmost column) orange; col axis (sample ids,
      top row) blue — in data mode both are on screen at once */
-  body.mode-row .rh,body.mode-data .rh{background:var(--row-meta-bg);color:var(--row-meta);border-color:var(--row-meta)}
-  body.mode-col .hdr.colhdr,body.mode-data .hdr.colhdr{background:var(--col-meta-bg);color:var(--col-meta);border-color:var(--col-meta)}
+  body.mode-row .rh,body.mode-data .rh{background:var(--row-meta-bg);color:var(--row-meta);border-color:var(--row-meta);font-weight:700}
+  body.mode-col .hdr.colhdr,body.mode-data .hdr.colhdr{background:var(--col-meta-bg);color:var(--col-meta);border-color:var(--col-meta);font-weight:700}
   #replaceModal{width:420px;border-radius:var(--radius-lg)}
   #replaceModal header{justify-content:space-between}
   #replaceModal header h3{margin-right:0}
