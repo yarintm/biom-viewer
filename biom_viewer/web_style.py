@@ -105,15 +105,14 @@ STYLE = """
   button.nav:hover:not(:disabled),button.tool:hover{background:var(--hl);border-color:var(--sel-outline)}
   button.nav:active:not(:disabled),button.tool:active{transform:translateY(.5px)}
   button.nav:disabled{opacity:.35;cursor:default}
-  #viewsBtn{max-width:220px;flex-shrink:0;margin-left:10px}
+  #viewsBtn{max-width:380px;flex-shrink:0;margin-left:10px}
   .views-current-name{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
-             max-width:150px;display:inline-block;vertical-align:bottom}
+             max-width:340px;display:inline-block;vertical-align:bottom}
   .views-dirty-dot{color:var(--row-meta);font-size:8px;margin:0 1px;vertical-align:middle}
   /* Deliberately no color for the plain "a view is active" state -- the
      name in the button already says that. Color is reserved for the one
      state that needs it (unsaved changes), so it isn't fighting the green
      used elsewhere (chips, selection, accent) for attention. */
-  #viewsBtn.views-dirty{border-color:var(--row-meta);background:var(--row-meta-bg)}
   .views-dirty-banner{background:var(--row-meta-bg);border:1px solid var(--row-meta);border-radius:6px;
              padding:7px 8px;margin-bottom:6px}
   .views-dirty-msg{color:var(--row-meta);font-size:11.5px;font-weight:600;margin-bottom:6px}
@@ -177,8 +176,11 @@ STYLE = """
   .fp-buttons{display:flex;gap:4px}
   .fp-buttons button{flex:1}
   #axisChips{display:none;gap:6px;padding:8px 14px;flex-wrap:wrap;background:var(--panel-bg);border-bottom:1px solid var(--border)}
-  .chip{display:inline-flex;align-items:center;gap:6px;background:var(--hl);color:var(--fg);
-             border:1px solid var(--sel-outline);border-radius:12px;padding:4px 6px 4px 10px;font-size:11.5px;
+  /* Deliberately neutral -- the icon per chip type (📌 ⇅ 🔽 ✏️ 🗑) already
+     tells them apart, so a uniform accent color here wasn't conveying
+     anything beyond "this app uses green a lot everywhere." */
+  .chip{display:inline-flex;align-items:center;gap:6px;background:var(--panel-bg);color:var(--fg);
+             border:1px solid var(--border);border-radius:12px;padding:4px 6px 4px 10px;font-size:11.5px;
              box-shadow:var(--shadow-sm)}
   .chip code{font-family:ui-monospace,monospace;font-size:10.5px;background:var(--panel-bg);
              padding:1px 4px;border-radius:3px}
