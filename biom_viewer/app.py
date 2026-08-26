@@ -701,7 +701,12 @@ let summaryVisible=false;
 // In 'col' mode, double-clicking one row header expands just that field's
 // row to a stat summary (instead of summaryVisible's "expand every row").
 let expandedFieldRow=null;
-function anyFieldRowExpanded(){ return stripOnRows() || (mode==='col' && expandedFieldRow!=null); }
+// Pinned fields live outside the paged position space expandedFieldRow
+// indexes into (see colFieldsForPaging), so their own double-click expand
+// needs a name-keyed twin instead of a position index. Mutually exclusive
+// with expandedFieldRow -- only one field row is ever expanded at a time.
+let expandedPinnedField=null;
+function anyFieldRowExpanded(){ return stripOnRows() || (mode==='col' && (expandedFieldRow!=null || expandedPinnedField!=null)); }
 // Expanding/collapsing a row changes rowsPerPage() (the expanded row eats
 // extra height budget), which shifts which fields "page N" covers -- so the
 // clicked row can silently scroll off the page it was just clicked on.
@@ -709,9 +714,21 @@ function anyFieldRowExpanded(){ return stripOnRows() || (mode==='col' && expande
 // needed for the same reason.
 function toggleFieldRow(r){
   expandedFieldRow = (expandedFieldRow===r) ? null : r;
+  expandedPinnedField = null;
   computeFit();
   const maxPage = Math.max(0, Math.ceil(rowsTotal()/rowsPerPage()) - 1);
   rowPage = Math.min(Math.floor(r/rowsPerPage()), maxPage);
+  render();
+}
+// Same idea for a frozen field row -- it's always visible (top of the grid,
+// independent of rowPage), so there's no row to re-center on, just a fit
+// recompute since rowsPerPage() shrinks to make room for the tall track.
+function toggleFieldRowPinned(field){
+  expandedPinnedField = (expandedPinnedField===field) ? null : field;
+  expandedFieldRow = null;
+  computeFit();
+  const maxPage = Math.max(0, Math.ceil(rowsTotal()/rowsPerPage()) - 1);
+  rowPage = Math.min(rowPage, maxPage);
   render();
 }
 const GAP=14;
@@ -823,6 +840,14 @@ function computeFit(){
     // Frozen fields are never the expanded one (see colFieldsForPaging),
     // so they always cost one short track each here.
     autoRows = Math.max(1, Math.floor((availH - shortRowH - statRowH()) / shortRowH) + 1 - pinnedCount);
+  } else if(mode==='col' && expandedPinnedField!=null){
+    // Same idea, but the expanded row is in the frozen block instead of the
+    // paged rows -- the paged rows stay at their normal short cost, only
+    // the frozen block's extra height (statRowH() over its usual shortRowH)
+    // needs to come out of the budget.
+    const extra = statRowH() - shortRowH;
+    const totalRowsTarget = Math.max(2, Math.floor((availH - extra)/shortRowH));
+    autoRows = Math.max(1, totalRowsTarget - 1 - pinnedCount);
   } else {
     const totalRowsTarget = Math.max(2, Math.floor(availH/shortRowH)); // includes header row
     autoRows = Math.max(1, totalRowsTarget - 1 - pinnedCount);
@@ -944,7 +969,7 @@ const modeBtns = [...document.querySelectorAll('#modeGroup button')];
 
 function setMode(m){
   mode = m;
-  if(m!=='col') expandedFieldRow = null;
+  if(m!=='col'){ expandedFieldRow = null; expandedPinnedField = null; }
   modeBtns.forEach(x=>x.classList.toggle('active', x.dataset.m===m));
   document.body.className = 'mode-'+m;
   document.getElementById('modeTag').textContent =
@@ -1442,7 +1467,8 @@ async function render(){
     // below), not this branch's stretchy rowHPx -- subtract their pixel
     // cost first so the paged rows' stretch target doesn't silently push
     // the grid's total height past availH by the frozen block's height.
-    const pinnedBlockPx = pinnedCount * shortRowHPx();
+    const pinnedBlockPx = pinnedCount * shortRowHPx()
+      + (expandedPinnedField!=null ? statRowH() - shortRowHPx() : 0);
     rowHPx = (availH - pinnedBlockPx) / (Math.max(renderedRows, rowsPerPage())+1);
     headerRowHPx = rowHPx;
   }
@@ -1464,12 +1490,17 @@ async function render(){
   const fieldExpandedStat = fieldExpandedIdx!=null
     ? await window.pywebview.api.field_summary('sample', colFieldAt(fieldExpandedIdx), visSample)
     : null;
+  const pinnedFieldExpandedStat = (expandedPinnedField!=null && !stripOnRows())
+    ? await window.pywebview.api.field_summary('sample', expandedPinnedField, visSample)
+    : null;
 
   const grid = document.getElementById('grid');
   const statRowTrack = stripOnCols() ? `${statRowH()}px ` : '';
   const pinnedFieldRowH = stripOnRows() ? statRowH() : shortRowHPx();
   const pinnedTrack = pinnedRaw.length ? `repeat(${pinnedRaw.length}, ${shortRowHPx()}px) `
-    : pinnedFieldsOrdered.length ? `repeat(${pinnedFieldsOrdered.length}, ${pinnedFieldRowH}px) ` : '';
+    : pinnedFieldsOrdered.length
+      ? pinnedFieldsOrdered.map(f => `${f===expandedPinnedField ? statRowH() : pinnedFieldRowH}px`).join(' ') + ' '
+      : '';
   const rowsTrack = rowHeights ? rowHeights.map(h=>`${h}px`).join(' ') : `repeat(${renderedRows}, ${rowHPx}px)`;
   grid.classList.toggle('col-stats', stripOnCols());
   grid.style.gridTemplateColumns = `${RHW}px repeat(${renderedCols}, ${colWPx}px)`;
@@ -1570,6 +1601,11 @@ async function render(){
       rh.innerHTML = `<div class="stat-line rh-label">${escapeHtml(label)}</div>` + statCellHtml(pinnedFieldStats[pi]) +
         `<span class="axis-ctl"><button class="pin-btn on" data-field="${escapeHtml(field)}" title="Unpin">📌</button></span>`;
       wireStatOther(rh, pinnedFieldStats[pi], label);
+    } else if(field===expandedPinnedField){
+      rh.classList.add('rh-stats');
+      rh.innerHTML = `<div class="stat-line rh-label">${escapeHtml(label)}</div>` + statCellHtml(pinnedFieldExpandedStat) +
+        `<span class="axis-ctl"><button class="pin-btn on" data-field="${escapeHtml(field)}" title="Unpin">📌</button></span>`;
+      wireStatOther(rh, pinnedFieldExpandedStat, label);
     } else {
       rh.innerHTML = `<span class="hdr-label">${escapeHtml(label)}</span>${axisControlsHtml('sample', field)}` +
         `<span class="axis-ctl"><button class="pin-btn on" data-field="${escapeHtml(field)}" title="Unpin">📌</button></span>`;
@@ -1582,6 +1618,7 @@ async function render(){
       showSelected(label);
       applyHighlight();
     });
+    if(mode==='col') rh.addEventListener('dblclick', ()=>{ toggleFieldRowPinned(field); });
     grid.appendChild(rh);
     for(let c=c0;c<c1;c++){
       const cell = document.createElement('div');
