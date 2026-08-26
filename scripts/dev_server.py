@@ -9,6 +9,7 @@ import os
 import sys
 import tempfile
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
 
 import biom
 
@@ -32,6 +33,11 @@ if(!window.pywebview){
     field_summary: (axis, field) => post('/api/field_summary', {axis, field}),
     export_table: (spec) => post('/api/export_table', {spec}),
     open_url: (url) => post('/api/open_url', {url}),
+    load_workspace: () => post('/api/load_workspace'),
+    save_current: (state) => post('/api/save_current', {state}),
+    save_view: (name, state) => post('/api/save_view', {name, state}),
+    delete_view: (name) => post('/api/delete_view', {name}),
+    rename_view: (old_name, new_name) => post('/api/rename_view', {old_name, new_name}),
   }};
   window.dispatchEvent(new Event('pywebviewready'));
 }
@@ -47,6 +53,11 @@ API = {
     "/api/field_summary": lambda body: API_INSTANCE.field_summary(body["axis"], body["field"]),
     "/api/export_table": lambda body: _dev_export(body["spec"]),
     "/api/open_url": lambda body: API_INSTANCE.open_url(body["url"]) or {"ok": True},
+    "/api/load_workspace": lambda body: API_INSTANCE.load_workspace(),
+    "/api/save_current": lambda body: API_INSTANCE.save_current(body["state"]) or {"ok": True},
+    "/api/save_view": lambda body: API_INSTANCE.save_view(body["name"], body["state"]) or {"ok": True},
+    "/api/delete_view": lambda body: API_INSTANCE.delete_view(body["name"]) or {"ok": True},
+    "/api/rename_view": lambda body: API_INSTANCE.rename_view(body["old_name"], body["new_name"]),
 }
 
 
@@ -104,7 +115,11 @@ def main():
     if len(sys.argv) < 2:
         print("Usage: dev_server.py <file.biom> [port]", file=sys.stderr)
         sys.exit(1)
-    API_INSTANCE = bv.Api(biom.load_table(sys.argv[1]), sys.argv[1])
+    # A dedicated temp-file store, not the real ~/Library/Application
+    # Support/BiomViewer/state.json -- manual dev testing should never leave
+    # saved views behind in (or read stale ones from) the real app's data.
+    dev_store = bv.WorkspaceStore(Path(tempfile.gettempdir()) / "biom-viewer-dev-state.json")
+    API_INSTANCE = bv.Api(biom.load_table(sys.argv[1]), sys.argv[1], workspace_store=dev_store)
     port = int(sys.argv[2]) if len(sys.argv) > 2 else 8765
     # Single-threaded on purpose: pywebview's real JS<->Python bridge
     # dispatches calls sequentially too, so this matches production
