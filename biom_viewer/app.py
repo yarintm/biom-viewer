@@ -576,9 +576,7 @@ PAGE = """<!doctype html>
     --shadow-lg:light-dark(0 20px 48px rgba(0,0,0,.18),0 20px 56px rgba(0,0,0,.6));
     --ease:cubic-bezier(.2,.8,.2,1); --dur:.14s;
     --row-meta:light-dark(#b3590a,#f0b578); --row-meta-bg:light-dark(#f7d3a2,#4a3216);
-    --row-meta-fg:light-dark(#4a2a08,#2a1608);
     --col-meta:light-dark(#0d4fb0,#8fc0ff); --col-meta-bg:light-dark(#bcdaff,#1e3455);
-    --col-meta-fg:light-dark(#0a2c5e,#eaf3ff);
     --danger:light-dark(#c3392b,#ff7a70);
   }
   [data-theme="light"]{ color-scheme: light }
@@ -604,8 +602,8 @@ PAGE = """<!doctype html>
            padding:4px 11px;font-size:12px;cursor:pointer;transition:background var(--dur) var(--ease),color var(--dur) var(--ease)}
   #modeGroup button:hover:not(.active){color:var(--fg);background:var(--hl)}
   #modeGroup button.active{background:var(--accent);color:var(--bg);font-weight:700}
-  #modeGroup button[data-m="row"].active{background:var(--row-meta);color:var(--row-meta-fg)}
-  #modeGroup button[data-m="col"].active{background:var(--col-meta);color:var(--col-meta-fg)}
+  #modeGroup button[data-m="row"].active{background:var(--row-meta);color:var(--bg)}
+  #modeGroup button[data-m="col"].active{background:var(--col-meta);color:var(--bg)}
   #searchWrap{position:relative;display:flex;align-items:center;gap:4px}
   #searchBox{width:220px;box-sizing:border-box;background:var(--input-bg);color:var(--fg);
              border:1px solid var(--input-border);border-radius:var(--radius-sm);padding:5px 9px;font-size:12.5px;outline:none;
@@ -2012,6 +2010,12 @@ function copySelected(){
   let ok=false;
   try{ ok = document.execCommand('copy'); }catch(err){}
   if(!ok && navigator.clipboard) navigator.clipboard.writeText(inp.value).catch(()=>{});
+  // Copy is already done by this point -- collapse the selection and drop
+  // focus so the readout reads as a plain value display (Excel's cell-
+  // reference box) instead of looking permanently "selected" like blue-
+  // highlighted text. The user can still click in and drag-select manually.
+  inp.setSelectionRange(0, 0);
+  inp.blur();
 }
 
 // Same non-secure-context issue as copySelected: navigator.clipboard is
