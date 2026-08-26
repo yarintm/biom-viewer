@@ -60,6 +60,11 @@ function toggleFieldRowPinned(field){
 }
 const GAP=14;
 const COLW_TARGET=130, RHW_MIN=60, RHW_MAX=240;
+// The separator between a cell's "<row> | <column>" identity and its value
+// in the readout bar. A constant because openCellModal splits the string
+// back apart on it to title the expanded view -- built by hand in seven
+// places, the two halves would eventually disagree about the spacing.
+const SEL_EQ = '  =  ';
 let RHW=RHW_MAX;
 function rowsPerPage(){ return autoRows; }
 function colsPerPage(){ return autoCols; }
@@ -882,8 +887,8 @@ async function jumpTo(entry){
     selR = entry.fi; selC = pos;
   }
   await render();
-  const label = entry.type==='rowValue' ? `${entry.id}  |  ${entry.field}  =  ${entry.value}`
-    : entry.type==='colValue' ? `${entry.field}  |  ${entry.id}  =  ${entry.value}`
+  const label = entry.type==='rowValue' ? `${entry.id}  |  ${entry.field}${SEL_EQ}${entry.value}`
+    : entry.type==='colValue' ? `${entry.field}  |  ${entry.id}${SEL_EQ}${entry.value}`
     : entry.label;
   showSelected(label);
 }
@@ -1069,7 +1074,7 @@ async function render(){
         cell.title = `${label}\n${colLabel(c)} = ${v}`;
         cell.addEventListener('click', ()=>{
           selR=null; selC=c; selPinnedRaw=rawIdx; selPinnedField=null;
-          showSelected(`${label}  |  ${colLabel(c)}  =  ${v}`, v);
+          showSelected(`${label}  |  ${colLabel(c)}${SEL_EQ}${v}`, v);
           applyHighlight();
         });
       } else {
@@ -1080,7 +1085,7 @@ async function render(){
         cell.title = `${label}\n${colLabel(c)} = ${text}`;
         cell.addEventListener('click', ()=>{
           selR=null; selC=c; selPinnedRaw=rawIdx; selPinnedField=null;
-          showSelected(`${label}  |  ${colLabel(c)}  =  ${text}`, raw);
+          showSelected(`${label}  |  ${colLabel(c)}${SEL_EQ}${text}`, raw);
           applyHighlight();
         });
       }
@@ -1131,7 +1136,7 @@ async function render(){
       cell.title = `${label}\n${colLabel(c)} = ${text}`;
       cell.addEventListener('click', ()=>{
         selR=null; selC=c; selPinnedField=field; selPinnedRaw=null;
-        showSelected(`${label}  |  ${colLabel(c)}  =  ${text}`, raw);
+        showSelected(`${label}  |  ${colLabel(c)}${SEL_EQ}${text}`, raw);
         applyHighlight();
       });
       grid.appendChild(cell);
@@ -1181,7 +1186,7 @@ async function render(){
         cell.title = `${rowLabel(r)}\n${colLabel(c)} = ${v}`;
         cell.addEventListener('click', ()=>{
           selR=r; selC=c; selPinnedRaw=null; selPinnedField=null;
-          showSelected(`${rowLabel(r)}  |  ${colLabel(c)}  =  ${v}`, v);
+          showSelected(`${rowLabel(r)}  |  ${colLabel(c)}${SEL_EQ}${v}`, v);
           applyHighlight();
         });
       } else {
@@ -1192,7 +1197,7 @@ async function render(){
         cell.title = `${rowLabel(r)}\n${colLabel(c)} = ${text}`;
         cell.addEventListener('click', ()=>{
           selR=r; selC=c; selPinnedRaw=null; selPinnedField=null;
-          showSelected(`${rowLabel(r)}  |  ${colLabel(c)}  =  ${text}`, raw);
+          showSelected(`${rowLabel(r)}  |  ${colLabel(c)}${SEL_EQ}${text}`, raw);
           applyHighlight();
         });
       }
@@ -1257,7 +1262,12 @@ function showSelected(text, raw){
   // The expanded view is a modal that covers the grid, so by the time you
   // are reading it the row and column it came from are behind a blur. It
   // said "Cell content" and nothing else; now it says which cell.
-  lastSelectedLabel = raw!==undefined ? text.replace(/\s+=\s+[\s\S]*$/, '') : text;
+  // indexOf on the literal separator rather than a regex: SCRIPT is a plain
+  // (non-raw) Python string, so a JS regex with \\s in it is an invalid
+  // Python escape -- it happens to survive today but Python already warns
+  // and will eventually stop passing it through.
+  const eq = text.indexOf(SEL_EQ);
+  lastSelectedLabel = (raw!==undefined && eq>=0) ? text.slice(0, eq) : text;
   const inp=document.getElementById('selected');
   inp.value = text;
   if(!suppressSelectionCopy) copySelected();
