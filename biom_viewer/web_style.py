@@ -480,6 +480,13 @@ STYLE = """
   .wm-list .wm-row{display:flex;justify-content:space-between;gap:10px;padding:2px 4px;border-radius:3px}
   .wm-list .wm-row:hover{background:var(--hl)}
   .wm-list .wm-row .wm-count{color:var(--dim);flex:none}
+  /* A taxonomy string is longer than the dialog; without this it pushed its
+     own count off the right edge, which is the number you opened the list to
+     read. Break anywhere -- these are ids, not prose with spaces to break at. */
+  .wm-list .wm-row span:first-child{min-width:0;overflow-wrap:anywhere}
+  /* Italic and dimmed: this row is the absence of a value, not one more
+     category sitting alongside the real ones. */
+  .wm-list .wm-row-missing span:first-child{color:var(--dim);font-style:italic}
   .stat-cell,.rh-stats{background:var(--panel-bg);color:var(--dim);font-size:calc(var(--fs)*0.9);line-height:1.35;
              padding:4px 6px;display:flex;flex-direction:column;gap:3px;overflow:hidden;cursor:pointer;min-height:0}
   .rh-stats{white-space:normal}
@@ -511,6 +518,23 @@ STYLE = """
   .stat-top-row .fill{position:absolute;inset:0;background:var(--nz-bg);z-index:0}
   .stat-top-row .lbl,.stat-top-row .pct{position:relative;z-index:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .stat-top-row .pct{flex-shrink:0;font-family:ui-monospace,monospace}
+
+  /* Bottom center, clear of the toolbar and the chips row, both of which the
+     toast is usually reporting a change to. pointer-events:none so it can
+     never swallow a click on the grid underneath while it fades. */
+  #toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%) translateY(6px);
+         background:var(--panel-raised);color:var(--fg);border:1px solid var(--border);
+         border-radius:var(--radius-md);padding:6px 14px;font-size:13px;
+         box-shadow:0 4px 16px light-dark(rgba(0,0,0,.16),rgba(0,0,0,.5));
+         max-width:min(70vw,520px);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+         opacity:0;pointer-events:none;z-index:60;transition:opacity .12s,transform .12s}
+  #toast.on{opacity:1;transform:translateX(-50%) translateY(0)}
+  /* A toast that slides on every undo is noise for anyone who asked the OS
+     to stop moving things; the message still appears and still fades. */
+  @media (prefers-reduced-motion:reduce){
+    #toast{transition:opacity .12s;transform:translateX(-50%)}
+    #toast.on{transform:translateX(-50%)}
+  }
 
   /* Last in the sheet on purpose: these override plain id selectors of the
      same specificity, and a media query adds none of its own -- placed

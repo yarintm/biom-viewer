@@ -699,6 +699,9 @@ PAGE = """<!doctype html>
     <div id="valuesBody" class="wm-body wm-list"></div>
   </div>
 </div>
+<!-- aria-live so the announcement reaches a screen reader too: ⌘Z is exactly
+     the action whose result is hardest to perceive without sight. -->
+<div id="toast" role="status" aria-live="polite"></div>
 <script>
 {SCRIPT}
 </script>

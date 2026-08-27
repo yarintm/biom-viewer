@@ -284,8 +284,12 @@ function scheduleAutosave(){
   }, 1000);
 }
 
-function recordHistory(){
-  historyPast.push(snapshotState());
+// The label describes the action about to be performed, so undo() can say
+// what it just took back rather than leaving ⌘Z silent. It rides along with
+// the snapshot instead of in a parallel array so the 50-entry shift() can't
+// desynchronize the two.
+function recordHistory(label){
+  historyPast.push({state: snapshotState(), label});
   if(historyPast.length>50) historyPast.shift();
   historyFuture = [];
   scheduleAutosave();
@@ -347,15 +351,31 @@ function viewStatesEqual(a, b){
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
+// ponytail: one shared timer, so a second toast replaces the first rather
+// than queueing -- undo held down is the common case and a queue would run
+// the announcements long after the state settled.
+let toastTimer = null;
+function toast(msg){
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('on');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(()=>el.classList.remove('on'), 1800);
+}
+
 function undo(){
-  if(!historyPast.length) return;
-  historyFuture.push(snapshotState());
-  restoreState(historyPast.pop());
+  if(!historyPast.length){ toast('Nothing to undo'); return; }
+  const entry = historyPast.pop();
+  historyFuture.push({state: snapshotState(), label: entry.label});
+  restoreState(entry.state);
+  toast(entry.label ? 'Undo: ' + entry.label : 'Undone');
 }
 function redo(){
-  if(!historyFuture.length) return;
-  historyPast.push(snapshotState());
-  restoreState(historyFuture.pop());
+  if(!historyFuture.length){ toast('Nothing to redo'); return; }
+  const entry = historyFuture.pop();
+  historyPast.push({state: snapshotState(), label: entry.label});
+  restoreState(entry.state);
+  toast(entry.label ? 'Redo: ' + entry.label : 'Redone');
 }
 
 // Search results carry a raw matrix index (jumpTo's entry.i/.fi). If that
@@ -374,7 +394,7 @@ function resolveAxisPosition(axis, rawIdx){
   // unconditionally at the top -- otherwise every ordinary jump-to (the
   // common case, where pos>=0 above already returned) would push a
   // spurious undo/autosave entry for a navigation that changed nothing.
-  recordHistory();
+  recordHistory('clear sort and filters to reach the search result');
   axisState[axis].sortField = null;
   axisState[axis].sortDir = 0;
   axisState[axis].filters = [];
@@ -1331,9 +1351,13 @@ function copySelected(){
 // Same non-secure-context issue as copySelected: navigator.clipboard is
 // undefined under pywebview, so every modal Copy button needs the
 // execCommand fallback via a throwaway textarea instead of calling it directly.
-function writeClipboard(text){
+function writeClipboard(text, what){
   if(navigator.clipboard){ navigator.clipboard.writeText(text).catch(()=>execCommandCopy(text)); }
   else{ execCommandCopy(text); }
+  // The modal Copy buttons had no feedback at all -- nothing moves, and the
+  // clipboard is somewhere else. The grid's own copy path passes no `what`
+  // because it already flashes the selection bar.
+  if(what) toast('Copied ' + what);
 }
 function execCommandCopy(text){
   const ta=document.createElement('textarea');
@@ -1394,24 +1418,33 @@ function openCellModal(){
 }
 document.getElementById('expandBtn').onclick = openCellModal;
 document.getElementById('cellCopy').onclick = ()=>{
-  writeClipboard(document.getElementById('cellBlock').textContent);
+  writeClipboard(document.getElementById('cellBlock').textContent, 'cell value');
 };
 document.getElementById('cellClose').onclick = ()=>document.getElementById('cellOverlay').classList.remove('open');
 document.getElementById('cellOverlay').addEventListener('click', (e)=>{
   if(e.target.id === 'cellOverlay') e.currentTarget.classList.remove('open');
 });
 
-let lastValuesText = '';
+let lastValuesText = '', lastValuesCount = 0;
 function openValuesModal(s, label){
   document.getElementById('valuesTitle').textContent = `${label} — all ${s.distinct} values`;
-  document.getElementById('valuesBody').innerHTML = s.all
-    .map(v=>`<div class="wm-row"><span>${escapeHtml(v.value)}</span><span class="wm-count">${v.count}</span></div>`)
-    .join('');
+  const rows = s.all
+    .map(v=>`<div class="wm-row"><span>${escapeHtml(v.value)}</span><span class="wm-count">${v.count}</span></div>`);
+  // "all N values" counts distinct present values, so rows with no value at
+  // all were silently absent -- and for a sparse metadata field that is the
+  // biggest group in the column. Marked as a non-value so it can't be read
+  // as a category named "missing", and left out of the copied text, which is
+  // value/count pairs meant for a spreadsheet.
+  if(s.missing){
+    rows.push(`<div class="wm-row wm-row-missing"><span>(no value)</span><span class="wm-count">${s.missing}</span></div>`);
+  }
+  document.getElementById('valuesBody').innerHTML = rows.join('');
+  lastValuesCount = s.all.length;
   lastValuesText = s.all.map(v=>`${v.value}\t${v.count}`).join('\\n');
   document.getElementById('valuesOverlay').classList.add('open');
 }
 document.getElementById('valuesCopy').onclick = ()=>{
-  writeClipboard(lastValuesText);
+  writeClipboard(lastValuesText, lastValuesCount + ' values');
 };
 document.getElementById('valuesClose').onclick = ()=>document.getElementById('valuesOverlay').classList.remove('open');
 document.getElementById('valuesOverlay').addEventListener('click', (e)=>{
@@ -1478,7 +1511,7 @@ function headerContextItems(el){
 }
 
 function cycleSort(axis, field){
-  recordHistory();
+  recordHistory('sort ' + axisLabel(axis) + ' by ' + fieldDisplay(axis, field));
   const st = axisState[axis];
   if(st.sortField!==field){ st.sortField=field; st.sortDir=1; }
   else if(st.sortDir===1){ st.sortDir=-1; }
@@ -1513,7 +1546,7 @@ function filterChipLabel(axis, f){
 }
 
 function removeSort(axis){
-  recordHistory();
+  recordHistory('remove ' + axisLabel(axis) + ' sort');
   axisState[axis].sortField = null;
   axisState[axis].sortDir = 0;
   recomputeVisible(axis);
@@ -1523,7 +1556,7 @@ function removeSort(axis){
 }
 
 function removeFilter(axis, field){
-  recordHistory();
+  recordHistory('remove ' + axisLabel(axis) + ' filter on ' + fieldDisplay(axis, field));
   axisState[axis].filters = axisState[axis].filters.filter(f=>f.field!==field);
   recomputeVisible(axis);
   if(axis==='observation'){ rowPage=0; } else { colPage=0; }
@@ -1532,21 +1565,21 @@ function removeFilter(axis, field){
 }
 
 function renameField(axis, field, newName){
-  recordHistory();
+  recordHistory('rename ' + fieldDisplay(axis, field) + ' to ' + newName);
   axisState[axis].renames[field] = newName;
   render();
   renderAxisChips();
 }
 
 function unrenameField(axis, field){
-  recordHistory();
+  recordHistory('undo rename of ' + field);
   delete axisState[axis].renames[field];
   render();
   renderAxisChips();
 }
 
 function deleteField(axis, field){
-  recordHistory();
+  recordHistory('delete column ' + fieldDisplay(axis, field));
   const fieldsArr = axis==='observation' ? rowFields : colFields;
   const idx = fieldsArr.indexOf(field);
   if(idx>=0) fieldsArr.splice(idx, 1);
@@ -1569,7 +1602,7 @@ function deleteField(axis, field){
 }
 
 function undeleteField(axis, field){
-  recordHistory();
+  recordHistory('restore column ' + field);
   axisState[axis].deletedFields = axisState[axis].deletedFields.filter(f=>f!==field);
   const fieldsArr = axis==='observation' ? rowFields : colFields;
   if(!fieldsArr.includes(field)) fieldsArr.push(field);
@@ -1581,6 +1614,14 @@ function undeleteField(axis, field){
 // One chip per active sort and per active filter (not one combined chip per
 // axis) so each can be read and removed independently -- a single "3
 // filters" chip told you nothing about what was actually filtered.
+// The chips used to label their axis 'observation'/'sample' -- the internal
+// axis keys -- while the mode buttons two rows above said "Row metadata" /
+// "Col metadata" for the same two axes. One vocabulary; row/col wins because
+// the rest of the UI (rowNav, colNav, "rows 1-26 / 60") already speaks it.
+// The replace dialog's "Observation (row) metadata" keeps the mapping to BIOM
+// terminology visible for anyone who needs it.
+function axisLabel(axis){ return axis==='observation' ? 'rows' : 'cols'; }
+
 function renderAxisChips(){
   const chips = [];
   if(pinnedObs.size>0){
@@ -1594,23 +1635,23 @@ function renderAxisChips(){
   ['observation','sample'].forEach(axis=>{
     const st = axisState[axis];
     if(st.sortDir!==0){
-      chips.push(`<span class="chip">⇅ ${axis}: <code>${escapeHtml(fieldDisplay(axis, st.sortField))}</code> ${st.sortDir===1?'▲':'▼'}` +
+      chips.push(`<span class="chip">⇅ ${axisLabel(axis)}: <code>${escapeHtml(fieldDisplay(axis, st.sortField))}</code> ${st.sortDir===1?'▲':'▼'}` +
         `<button class="chip-x" data-kind="sort" data-axis="${axis}" title="Clear sort">✕</button></span>`);
     }
     st.filters.forEach(f=>{
-      chips.push(`<span class="chip">🔽 ${axis}: ${escapeHtml(filterChipLabel(axis, f))}` +
+      chips.push(`<span class="chip">🔽 ${axisLabel(axis)}: ${escapeHtml(filterChipLabel(axis, f))}` +
         `<button class="chip-x" data-kind="filter" data-axis="${axis}" data-field="${escapeHtml(f.field)}" title="Remove filter">✕</button></span>`);
     });
     st.replacements.forEach(r=>{
-      chips.push(`<span class="chip">🔁 ${axis}: <code>${escapeHtml(fieldDisplay(axis, r.field))}</code> "${escapeHtml(r.find)}"→"${escapeHtml(r.replace)}"` +
+      chips.push(`<span class="chip">🔁 ${axisLabel(axis)}: <code>${escapeHtml(fieldDisplay(axis, r.field))}</code> "${escapeHtml(r.find)}"→"${escapeHtml(r.replace)}"` +
         `<button class="chip-x" data-kind="replace" data-axis="${axis}" data-field="${escapeHtml(r.field)}" title="Undo replacement">✕</button></span>`);
     });
     Object.entries(st.renames).forEach(([orig, newName])=>{
-      chips.push(`<span class="chip">✏️ ${axis}: <code>${escapeHtml(orig)}</code> → <code>${escapeHtml(newName)}</code>` +
+      chips.push(`<span class="chip">✏️ ${axisLabel(axis)}: <code>${escapeHtml(orig)}</code> → <code>${escapeHtml(newName)}</code>` +
         `<button class="chip-x" data-kind="unrename" data-axis="${axis}" data-field="${escapeHtml(orig)}" title="Undo rename">✕</button></span>`);
     });
     st.deletedFields.forEach(f=>{
-      chips.push(`<span class="chip">🗑 ${axis}: <code>${escapeHtml(f)}</code> deleted` +
+      chips.push(`<span class="chip">🗑 ${axisLabel(axis)}: <code>${escapeHtml(f)}</code> deleted` +
         `<button class="chip-x" data-kind="undelete" data-axis="${axis}" data-field="${escapeHtml(f)}" title="Restore field">✕</button></span>`);
     });
   });
@@ -1680,7 +1721,7 @@ function isBaseState(){
 }
 
 function clearAllChips(){
-  recordHistory();
+  recordHistory('clear all filters and sorts');
   axisState.observation = { sortField: null, sortDir: 0, filters: [], replacements: [], renames: {}, deletedFields: [] };
   axisState.sample = { sortField: null, sortDir: 0, filters: [], replacements: [], renames: {}, deletedFields: [] };
   pinnedObs.clear();
@@ -1791,7 +1832,7 @@ function openExportModal(){
   document.getElementById('codeOverlay').classList.add('open');
 }
 document.getElementById('codeCopy').onclick = ()=>{
-  writeClipboard(document.getElementById('codeBlock').textContent);
+  writeClipboard(document.getElementById('codeBlock').textContent, 'code');
 };
 document.getElementById('codeClose').onclick = ()=>document.getElementById('codeOverlay').classList.remove('open');
 document.getElementById('codeOverlay').addEventListener('click', (e)=>{
@@ -1910,7 +1951,7 @@ function openFilterInput(axis, field, anchorEl){
   }
 
   const apply = ()=>{
-    recordHistory();
+    recordHistory('filter ' + axisLabel(axis) + ' on ' + fieldDisplay(axis, field));
     const filters = st.filters.filter(f=>f.field!==field);
     if(numeric){
       const minV = pop.querySelector('.fp-min').value;
@@ -1930,7 +1971,7 @@ function openFilterInput(axis, field, anchorEl){
   pop.querySelector('.fp-apply').onclick = apply;
   const clearBtn = pop.querySelector('.fp-clear');
   if(clearBtn) clearBtn.onclick = ()=>{
-    recordHistory();
+    recordHistory('clear ' + axisLabel(axis) + ' filter on ' + fieldDisplay(axis, field));
     st.filters = st.filters.filter(f=>f.field!==field);
     recomputeVisible(axis);
     if(axis==='observation'){ rowPage=0; } else { colPage=0; }
@@ -2113,7 +2154,7 @@ function applyView(view, name){
   // comment), so ⌘Z after a switch reverts filters/sort but leaves the
   // switched-to view's mode/pins in place. Same partial coverage undo
   // already has for a plain pin toggle, not a new gap.
-  recordHistory();
+  recordHistory(name ? 'switch to view ' + name : 'switch view');
   applyViewState(view);
   lastAppliedViewName = name;
   lastLoadedViewState = captureViewState();
@@ -2402,7 +2443,7 @@ function renderRpList(){
 }
 
 function removeReplacement(axis, field){
-  recordHistory();
+  recordHistory('remove replacement on ' + fieldDisplay(axis, field));
   axisState[axis].replacements = axisState[axis].replacements.filter(r=>r.field!==field);
   render();
   renderAxisChips();
@@ -2422,7 +2463,7 @@ document.getElementById('rpApply').onclick = ()=>{
   const find = document.getElementById('rpFind').value;
   const replace = document.getElementById('rpReplace').value;
   if(!field || !find) return;
-  recordHistory();
+  recordHistory('replace text in ' + fieldDisplay(axis, field));
   axisState[axis].replacements = axisState[axis].replacements.filter(r=>r.field!==field);
   axisState[axis].replacements.push({field, find, replace});
   document.getElementById('rpFind').value = '';
