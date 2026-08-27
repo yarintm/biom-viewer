@@ -450,7 +450,11 @@ const modeBtns = [...document.querySelectorAll('#modeGroup button')];
 
 function setMode(m){
   mode = m;
-  expandedFieldRow = null; expandedPinnedField = null;
+  // summaryAll goes too, not just the single expansions: it means "every
+  // sample column" in data mode and "every field row" in 'col' mode, so
+  // carrying it across a switch turns a band the user asked for on one axis
+  // into an unasked-for explosion on the other.
+  expandedFieldRow = null; expandedPinnedField = null; summaryAll = false;
   modeBtns.forEach(x=>x.classList.toggle('active', x.dataset.m===m));
   document.body.className = 'mode-'+m;
   document.getElementById('modeTag').textContent =
@@ -1167,7 +1171,12 @@ async function render(){
       showSelected(label);
       applyHighlight();
     });
-    h.addEventListener('dblclick', ()=>{ toggleSummaryAll(); });
+    // Only where this axis actually has a summary to give. In 'col' mode the
+    // columns are samples whose cells are mixed-type metadata values, so
+    // there is nothing to summarize down a column -- and the handler used to
+    // fall through to the stat band, which lives on the ROW axis in that
+    // mode: double-clicking a column silently expanded every field row.
+    if(mode!=='col') h.addEventListener('dblclick', ()=>{ toggleSummaryAll(); });
     grid.appendChild(h);
   }
   if(stripOnCols()){
