@@ -1,0 +1,2683 @@
+"""Inline JS for the BIOM Viewer webview page (biom_viewer/app.py's PAGE).
+
+Same rationale as web_style.py: a plain string constant, not a static asset
+file, so PyInstaller bundles it via ordinary Python import analysis.
+"""
+
+SCRIPT = """
+window.onerror = (msg, url, line, col) => {
+  const el = document.getElementById('filename');
+  if(el) el.textContent = `JS error: ${msg} (line ${line}:${col})`;
+};
+let meta=null, rowPage=0, colPage=0, selR=null, selC=null, fontSize=11;
+// Global non-zero range, filled from meta(). Null on an empty or all-zero
+// table, in which case heatBucket() falls back to the flat .nz tint.
+let valueMin=null, valueMax=null;
+let autoRows=20, autoCols=8, rowHPx=22, colWPx=130;
+let availH=0, availW=0;
+// Pinned rows (raw observation indices) and their own selection slot --
+// deliberately outside axisState/undo history: pin/unpin is high-frequency
+// and low-stakes compared to sort/filter/rename/delete, so it shouldn't
+// flood the 50-entry undo stack or be ctrl-Z-able.
+let pinnedObs = new Set();
+let selPinnedRaw = null;
+// Same idea, one level up: in 'col' mode the "rows" are metadata field
+// names (colFields entries), a different identity space entirely -- keyed
+// by field name string (stable across sort; deleteField splices colFields
+// directly, see deleteField's cleanup) rather than a numeric index.
+let pinnedColFields = new Set();
+let selPinnedField = null;
+let summaryVisible=false;
+// In 'col' mode, double-clicking one row header expands just that field's
+// row to a stat summary (instead of summaryVisible's "expand every row").
+let expandedFieldRow=null;
+// Pinned fields live outside the paged position space expandedFieldRow
+// indexes into (see colFieldsForPaging), so their own double-click expand
+// needs a name-keyed twin instead of a position index. Mutually exclusive
+// with expandedFieldRow -- only one field row is ever expanded at a time.
+let expandedPinnedField=null;
+function anyFieldRowExpanded(){ return stripOnRows() || (mode==='col' && (expandedFieldRow!=null || expandedPinnedField!=null)); }
+// Expanding/collapsing a row changes rowsPerPage() (the expanded row eats
+// extra height budget), which shifts which fields "page N" covers -- so the
+// clicked row can silently scroll off the page it was just clicked on.
+// Recompute fit and re-center on r first, same fix toggleSummary already
+// needed for the same reason.
+function toggleFieldRow(r){
+  expandedFieldRow = (expandedFieldRow===r) ? null : r;
+  expandedPinnedField = null;
+  computeFit();
+  const maxPage = Math.max(0, Math.ceil(rowsTotal()/rowsPerPage()) - 1);
+  rowPage = Math.min(Math.floor(r/rowsPerPage()), maxPage);
+  render();
+}
+// Same idea for a frozen field row -- it's always visible (top of the grid,
+// independent of rowPage), so there's no row to re-center on, just a fit
+// recompute since rowsPerPage() shrinks to make room for the tall track.
+function toggleFieldRowPinned(field){
+  expandedPinnedField = (expandedPinnedField===field) ? null : field;
+  expandedFieldRow = null;
+  computeFit();
+  const maxPage = Math.max(0, Math.ceil(rowsTotal()/rowsPerPage()) - 1);
+  rowPage = Math.min(rowPage, maxPage);
+  render();
+}
+const GAP=14;
+const COLW_TARGET=130, RHW_MIN=60, RHW_MAX=240;
+// The separator between a cell's "<row> | <column>" identity and its value
+// in the readout bar. A constant because openCellModal splits the string
+// back apart on it to title the expanded view -- built by hand in seven
+// places, the two halves would eventually disagree about the spacing.
+const SEL_EQ = '  =  ';
+
+// Which of the six magnitude shades a cell value gets (see .nz1-.nz6).
+//
+// Log-spaced, not linear. Abundance tables are heavily skewed -- a handful
+// of taxa carry most of the signal and the long tail sits orders of
+// magnitude below them -- so a linear ramp against the global maximum puts
+// virtually every cell in the palest bucket and the picture says nothing.
+// Normalising between log(min) and log(max) instead spends the whole
+// palette on the range the data actually occupies.
+//
+// Bounds come from meta() and are global, so the same value is the same
+// colour on every page; a per-page scale would quietly recalibrate itself
+// as you paged and make two screens of one table incomparable.
+// The key to the shading: six swatches between the actual bounds. Only in
+// data mode -- the metadata grids have no magnitudes to shade.
+function renderHeatLegend(){
+  const el = document.getElementById('heatLegend');
+  if(mode!=='data' || valueMax===null || valueMax===undefined){ el.innerHTML = ''; return; }
+  const swatches = [1,2,3,4,5,6].map(i=>`<i class="nz${i}"></i>`).join('');
+  el.innerHTML = `<b>${fmtBound(valueMin)}</b>${swatches}<b>${fmtBound(valueMax)}</b>`;
+  el.title = `Cell shading runs from ${valueMin} to ${valueMax}, log-spaced`;
+}
+
+function heatBucket(v){
+  if(!(v > 0)) return '';
+  if(valueMax === null || valueMax === undefined) return '';
+  const lo = Math.log1p(valueMin), hi = Math.log1p(valueMax);
+  // A table whose non-zeros are all the same value has no distribution to
+  // show; give them all the top shade rather than dividing by zero.
+  const t = hi > lo ? (Math.log1p(v) - lo) / (hi - lo) : 1;
+  return ' nz' + Math.min(6, Math.max(1, Math.ceil(t * 6)));
+}
+let RHW=RHW_MAX;
+function rowsPerPage(){ return autoRows; }
+function colsPerPage(){ return autoCols; }
+
+// The row-header column's width, sized to its actual content instead of a
+// flat 240px: in 'col' mode with the stats strip on (field name + a stats
+// block needing real room), keep the generous fixed width; otherwise (plain
+// ids, e.g. numeric feature ids in row/data mode) shrink to fit the longest
+// label so it doesn't waste space for no reason.
+let _rhwCache = null;
+function computeRHW(){
+  if(anyFieldRowExpanded()) return RHW_MAX;
+  const key = mode+'|'+fontSize;
+  if(_rhwCache && _rhwCache.key===key) return _rhwCache.val;
+  const labels = mode==='col' ? colFields : (meta ? meta.row_ids : []);
+  let longest = '';
+  (labels||[]).forEach(l=>{ const s=''+l; if(s.length>longest.length) longest=s; });
+  const probe = document.createElement('span');
+  probe.style.cssText = `position:absolute;visibility:hidden;white-space:nowrap;left:-9999px;top:-9999px;font-size:${fontSize}px`;
+  probe.textContent = longest;
+  document.body.appendChild(probe);
+  const w = probe.getBoundingClientRect().width;
+  probe.remove();
+  const val = Math.min(RHW_MAX, Math.max(RHW_MIN, Math.ceil(w) + 16));
+  _rhwCache = {key, val};
+  return val;
+}
+
+// The stats strip's row-track height, measured (not guessed) off a real
+// offscreen worst-case cell so it never clips regardless of fontSize: hand
+// magic-number line-height math drifts from the actual CSS as soon as
+// padding/gap/line-height values change, and it did.
+let _statRowHCache = null;
+function statRowH(){
+  const key = fontSize + '|' + anyFieldRowExpanded();
+  if(_statRowHCache && _statRowHCache.key===key) return _statRowHCache.val;
+  const worstCase = {missing:0, n:1, distinct:999,
+    top:[{value:'x',count:1},{value:'x',count:1},{value:'x',count:1}], other_count:1};
+  const probe = document.createElement('div');
+  probe.className = 'cell stat-cell' + (anyFieldRowExpanded() ? ' rh-stats' : '');
+  probe.style.cssText = 'position:absolute;visibility:hidden;left:-9999px;top:-9999px;'
+    + `width:${anyFieldRowExpanded() ? RHW_MAX : COLW_TARGET}px;`;
+  probe.innerHTML = (anyFieldRowExpanded() ? '<div class="stat-line rh-label">X</div>' : '') + statCellHtml(worstCase);
+  document.body.appendChild(probe);
+  const val = Math.ceil(probe.getBoundingClientRect().height);
+  probe.remove();
+  _statRowHCache = {key, val};
+  return val;
+}
+
+// The metadata *fields* — the axis actually worth summarizing — sit on the
+// row axis in 'col' mode (colFields) and the column axis everywhere else
+// (data mode's samples, or 'row' mode's rowFields). Only 'col' mode's field
+// list is what gets summarized on the row side, because it's the only case
+// where the row axis is small (bounded by field count, not by taxa/sample
+// count) — tall rows are only affordable there.
+function stripOnRows(){ return summaryVisible && mode==='col'; }
+function stripOnCols(){ return summaryVisible && mode!=='col'; }
+
+// Toggling the strip can drastically shrink rowsPerPage() (tall stat rows
+// fit far fewer per page than plain rows), so the page that used to show
+// row `centerRow` may no longer be page 0. Recompute fit first, then land
+// on whichever page actually contains centerRow — otherwise the view jumps
+// back to the top of the list instead of staying on what was clicked.
+function toggleSummary(centerRow){
+  summaryVisible = !summaryVisible;
+  computeFit();
+  const maxPage = Math.max(0, Math.ceil(rowsTotal()/rowsPerPage()) - 1);
+  rowPage = centerRow!==undefined ? Math.floor(centerRow/rowsPerPage()) : Math.min(rowPage, maxPage);
+  render();
+}
+
+// Derived from the font, never measured off a rendered cell: cell height is
+// set by the grid track computed from this, so measuring it back would feed
+// into itself and can collapse the page to 2 giant rows after a partial page.
+function shortRowHPx(){ return Math.round(fontSize*1.3) + 8; } // 3px padding + 1px border, top and bottom
+
+function computeFit(){
+  const shortRowH = shortRowHPx();
+  const mainRect = document.getElementById('main').getBoundingClientRect();
+  const colNavH = document.getElementById('colNav').getBoundingClientRect().height;
+  availH = mainRect.height - colNavH - GAP - (stripOnCols() ? statRowH() : 0);
+  RHW = computeRHW();
+  availW = mainRect.width - RHW - GAP;
+
+  // Pinned rows get a fixed track above the paged rows (see render()) --
+  // shrink the paged budget by that many so the frozen block + paged rows
+  // still fit availH together. Observations (data/row mode) and fields
+  // (col mode) are two different identity spaces, but the row-budget math
+  // only cares about the count.
+  const pinnedCount = (mode==='data'||mode==='row') ? pinnedObs.size
+    : mode==='col' ? pinnedColFields.size : 0;
+
+  if(stripOnRows()){
+    // The column-header row stays short (it's just sample/observation ids,
+    // same as ever) -- only the field rows below it need the tall track,
+    // so only they should compete for the height budget. Frozen fields get
+    // the same tall track in this view (they're rendered as stat rows
+    // too), so they compete for it exactly like paged fields do.
+    autoRows = Math.max(1, Math.floor((availH - shortRowH) / statRowH()) - pinnedCount);
+  } else if(mode==='col' && expandedFieldRow!=null){
+    // One field row is expanded to a stat block; the rest stay short. This
+    // reserves the budget even if the expanded row isn't on the current
+    // page -- ponytail: slightly conservative, avoids a fit/page chicken-egg.
+    // Frozen fields are never the expanded one (see colFieldsForPaging),
+    // so they always cost one short track each here.
+    autoRows = Math.max(1, Math.floor((availH - shortRowH - statRowH()) / shortRowH) + 1 - pinnedCount);
+  } else if(mode==='col' && expandedPinnedField!=null){
+    // Same idea, but the expanded row is in the frozen block instead of the
+    // paged rows -- the paged rows stay at their normal short cost, only
+    // the frozen block's extra height (statRowH() over its usual shortRowH)
+    // needs to come out of the budget.
+    const extra = statRowH() - shortRowH;
+    const totalRowsTarget = Math.max(2, Math.floor((availH - extra)/shortRowH));
+    autoRows = Math.max(1, totalRowsTarget - 1 - pinnedCount);
+  } else {
+    const totalRowsTarget = Math.max(2, Math.floor(availH/shortRowH)); // includes header row
+    autoRows = Math.max(1, totalRowsTarget - 1 - pinnedCount);
+  }
+
+  autoCols = Math.max(1, Math.floor(availW/COLW_TARGET));
+
+  // Leftover width goes to the row-header column, not to the value columns.
+  // Row metadata mode routinely shows two or three fields, and splitting the
+  // whole window between them gave 500px of blank cell to the word
+  // "Bacteria" while the taxonomy ids beside it were still being chopped
+  // down to "...aceae|g__Blautia|s__fragilis_2" inside a 240px header. The
+  // ids are the part you actually need to read. Only kicks in once the
+  // header is already at its cap (i.e. its labels genuinely don't fit) and
+  // never takes more than half the window, so wide tables are untouched.
+  // Skipped while a field row is expanded: statRowH() probes that cell at a
+  // hardcoded RHW_MAX width, so moving RHW out from under it would measure
+  // the summary's height against the wrong column width.
+  const shownCols = meta ? Math.min(autoCols, colsTotal()) : autoCols;
+  const surplus = availW - shownCols * COLW_TARGET;
+  if(surplus > 0 && RHW >= RHW_MAX && !anyFieldRowExpanded()){
+    RHW = Math.min(RHW + surplus, Math.round(mainRect.width * 0.5));
+    availW = mainRect.width - RHW - GAP;
+  }
+}
+
+let mode='data'; // 'data' | 'row' (observation metadata) | 'col' (sample metadata)
+let rowFields=[], colFields=[];
+
+// Sort/filter state lives per underlying axis identity (observation, sample),
+// not per mode -- a filter set while viewing row-metadata mode still applies
+// to the same axis's rows in data mode. `field_summary`'s numeric/categorical
+// detection is reused for filter input type; see fieldIsNumeric().
+let axisState = {
+  observation: { sortField: null, sortDir: 0, filters: [], replacements: [], renames: {}, deletedFields: [] }, // sortDir: 0=off, 1=asc, -1=desc
+  sample: { sortField: null, sortDir: 0, filters: [], replacements: [], renames: {}, deletedFields: [] },
+};
+// filters entries: {field, kind:'numeric', min, max} or {field, kind:'categorical', text}
+
+// Computed visible-index arrays. null = identity (no active sort/filter for
+// that axis) -- the common case stays on the cheap contiguous data_window path.
+let visObs = null, visSample = null;
+
+function obsAt(i){ return visObs ? visObs[i] : i; }
+function sampleAt(j){ return visSample ? visSample[j] : j; }
+
+// Undo/redo is whole-state snapshotting rather than per-action inverses --
+// axisState (sort/filter/replace/rename/delete) plus the field-name arrays
+// (deleteField splices them) are small plain data, so a JSON deep-clone
+// before each mutation is simpler and less bug-prone than hand-writing an
+// inverse for every one of the ~10 mutating actions.
+let historyPast = [], historyFuture = [];
+function snapshotState(){
+  return {
+    axisState: JSON.parse(JSON.stringify(axisState)),
+    rowFields: rowFields.slice(),
+    colFields: colFields.slice(),
+  };
+}
+let autosaveTimer = null;
+// Debounced so a burst of edits (typing a filter value, dragging a range)
+// writes once, ~1s after things settle, not on every keystroke.
+function scheduleAutosave(){
+  clearTimeout(autosaveTimer);
+  autosaveTimer = setTimeout(()=>{
+    window.pywebview.api.save_current(captureViewState());
+  }, 1000);
+}
+
+// The label describes the action about to be performed, so undo() can say
+// what it just took back rather than leaving ⌘Z silent. It rides along with
+// the snapshot instead of in a parallel array so the 50-entry shift() can't
+// desynchronize the two.
+function recordHistory(label){
+  historyPast.push({state: snapshotState(), label});
+  if(historyPast.length>50) historyPast.shift();
+  historyFuture = [];
+  scheduleAutosave();
+}
+function restoreState(snap){
+  axisState = snap.axisState;
+  rowFields = snap.rowFields.slice();
+  colFields = snap.colFields.slice();
+  recomputeVisible('observation');
+  recomputeVisible('sample');
+  rowPage=0; colPage=0;
+  scheduleAutosave();
+  render();
+  renderAxisChips();
+}
+// A saved view is a superset of the undo snapshot above -- it also carries
+// mode and both pin sets, which snapshotState()/restoreState() deliberately
+// exclude from undo history (see pinnedObs's own comment). Two different
+// snapshot shapes for two different purposes, not one generalized one.
+function captureViewState(){
+  return {
+    mode,
+    axisState: JSON.parse(JSON.stringify(axisState)),
+    rowFields: rowFields.slice(),
+    colFields: colFields.slice(),
+    // Sorted, not insertion order -- Set iteration order depends on
+    // pin/unpin history, not membership, and viewStatesEqual's JSON.stringify
+    // compare would otherwise false-negative on two sets with identical
+    // members but different pin order (unpin+repin vs. never-touched).
+    pinnedObs: [...pinnedObs].sort((a,b)=>a-b),
+    pinnedColFields: [...pinnedColFields].sort(),
+  };
+}
+
+// Only mutates state -- callers decide when to render(), so a caller that's
+// about to do other work (reset a page, close a popover) isn't forced into
+// two renders for one logical change.
+function applyViewState(vs){
+  setMode(vs.mode);
+  axisState = JSON.parse(JSON.stringify(vs.axisState));
+  rowFields = vs.rowFields.slice();
+  colFields = vs.colFields.slice();
+  pinnedObs = new Set(vs.pinnedObs);
+  pinnedColFields = new Set(vs.pinnedColFields);
+  recomputeVisible('observation');
+  recomputeVisible('sample');
+  rowPage=0; colPage=0;
+}
+
+// Payloads from the saved-views list carry extra name/savedAt keys a plain
+// captureViewState() snapshot doesn't -- trim to the comparable subset before
+// any JSON.stringify equality check, or every comparison would false-negative.
+function viewStatePayload(v){
+  return {mode: v.mode, axisState: v.axisState, rowFields: v.rowFields, colFields: v.colFields,
+    pinnedObs: [...v.pinnedObs].sort((a,b)=>a-b), pinnedColFields: [...v.pinnedColFields].sort()};
+}
+
+function viewStatesEqual(a, b){
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+// ponytail: one shared timer, so a second toast replaces the first rather
+// than queueing -- undo held down is the common case and a queue would run
+// the announcements long after the state settled.
+let toastTimer = null;
+function toast(msg){
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('on');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(()=>el.classList.remove('on'), 1800);
+}
+
+function undo(){
+  if(!historyPast.length){ toast('Nothing to undo'); return; }
+  const entry = historyPast.pop();
+  historyFuture.push({state: snapshotState(), label: entry.label});
+  restoreState(entry.state);
+  toast(entry.label ? 'Undo: ' + entry.label : 'Undone');
+}
+function redo(){
+  if(!historyFuture.length){ toast('Nothing to redo'); return; }
+  const entry = historyFuture.pop();
+  historyPast.push({state: snapshotState(), label: entry.label});
+  restoreState(entry.state);
+  toast(entry.label ? 'Redo: ' + entry.label : 'Redone');
+}
+
+// Search results carry a raw matrix index (jumpTo's entry.i/.fi). If that
+// axis has an active sort/filter, the raw index no longer equals its grid
+// position -- resolve it against the current visible order, or if the
+// target was filtered out entirely, clear that axis's sort/filter so the
+// jump always lands on the actual item rather than silently landing on
+// whatever else happens to sit at that raw position.
+function resolveAxisPosition(axis, rawIdx){
+  const vis = axis==='observation' ? visObs : visSample;
+  if(!vis) return rawIdx;
+  const pos = vis.indexOf(rawIdx);
+  if(pos>=0) return pos;
+  // Only the "target was filtered out" branch below actually mutates
+  // axisState, so recordHistory() is guarded here rather than placed
+  // unconditionally at the top -- otherwise every ordinary jump-to (the
+  // common case, where pos>=0 above already returned) would push a
+  // spurious undo/autosave entry for a navigation that changed nothing.
+  recordHistory('clear sort and filters to reach the search result');
+  axisState[axis].sortField = null;
+  axisState[axis].sortDir = 0;
+  axisState[axis].filters = [];
+  recomputeVisible(axis);
+  renderAxisChips();
+  return rawIdx;
+}
+
+// jumpTo's observation-axis branches (search "jump to a taxon/row value")
+// route through here rather than calling resolveAxisPosition directly --
+// a pinned row is excluded from visObs on purpose (it's in the frozen
+// block, not the paginated flow), which resolveAxisPosition can't tell
+// apart from "filtered out" and would otherwise mis-resolve.
+function selectObservationRow(rawIdx){
+  if(pinnedObs.has(rawIdx)){
+    selR = null; selPinnedRaw = rawIdx;
+    return;
+  }
+  selPinnedRaw = null;
+  const pos = resolveAxisPosition('observation', rawIdx);
+  rowPage = Math.floor(pos / rowsPerPage());
+  selR = pos;
+}
+
+// Same idea for jumpTo's 'colField' branch (search "jump to a metadata
+// field" in col mode) -- colFields itself is never filtered/sorted like
+// visObs, so there's no resolveAxisPosition equivalent to fall through to;
+// a non-pinned field's position is just its index in colFieldsForPaging().
+function selectColField(field){
+  if(pinnedColFields.has(field)){
+    selR = null; selPinnedField = field;
+    return;
+  }
+  selPinnedField = null;
+  const pos = colFieldsForPaging().indexOf(field);
+  rowPage = Math.floor(Math.max(0, pos) / rowsPerPage());
+  selR = pos;
+}
+
+const modeBtns = [...document.querySelectorAll('#modeGroup button')];
+
+function setMode(m){
+  mode = m;
+  if(m!=='col'){ expandedFieldRow = null; expandedPinnedField = null; }
+  modeBtns.forEach(x=>x.classList.toggle('active', x.dataset.m===m));
+  document.body.className = 'mode-'+m;
+  document.getElementById('modeTag').textContent =
+    m==='col' ? 'SAMPLE METADATA' : m==='row' ? 'OBSERVATION METADATA' : '';
+  scheduleAutosave();
+}
+
+function fieldUnion(metaArr){
+  if(!metaArr) return [];
+  const seen = new Set();
+  const out = [];
+  metaArr.forEach(m=>{
+    if(!m) return;
+    Object.keys(m).forEach(k=>{ if(!seen.has(k)){ seen.add(k); out.push(k); } });
+  });
+  return out;
+}
+
+let savedViews = [];
+let lastAppliedViewName = null;
+let lastLoadedViewState = null;
+
+async function loadWorkspace(){
+  const workspace = await window.pywebview.api.load_workspace();
+  savedViews = workspace.views;
+  if(workspace.current) applyViewState(workspace.current);
+  lastLoadedViewState = captureViewState();
+}
+
+async function loadMeta(){
+  try{
+    meta = await window.pywebview.api.meta();
+    valueMin = meta.value_min ?? null;
+    valueMax = meta.value_max ?? null;
+    rowFields = fieldUnion(meta.row_metadata);
+    colFields = fieldUnion(meta.col_metadata);
+    // Split into the directory (de-emphasized -- context, not the point)
+    // and the basename (the actual document identity, kept prominent) --
+    // showing the whole absolute path at equal weight read as an
+    // undifferentiated text dump rather than a designed label.
+    const slash = meta.filename.lastIndexOf('/');
+    const dir = slash>=0 ? meta.filename.slice(0, slash+1) : '';
+    const base = slash>=0 ? meta.filename.slice(slash+1) : meta.filename;
+    document.getElementById('filename').innerHTML =
+      `<span class="file-dir">${escapeHtml(dir)}</span><span class="file-base">${escapeHtml(base)}</span>`;
+    document.getElementById('dims').textContent = `${meta.rows.toLocaleString()} × ${meta.cols.toLocaleString()}`;
+    await loadWorkspace();
+    buildSearchIndex();
+    render();
+    renderAxisChips();
+  } catch(err){
+    // This used to write the raw exception into the filename slot in the
+    // toolbar -- a 60px-minimum flex box that would have shown roughly
+    // "Failed to l…" above an otherwise blank app, with the actual reason
+    // unreachable. The grid is where the user is looking and has the room.
+    console.error(err);
+    showGridMessage('Couldn’t open this file', String(err && err.message || err));
+  }
+}
+
+// The grid area doubles as the app's message surface: nothing to show
+// (filtered to empty), nothing yet (loading), or nothing possible (a load
+// failure). One layout for all three so they can't drift apart.
+function showGridMessage(msg, detail, action){
+  const grid = document.getElementById('grid');
+  grid.className = 'grid-empty-state';
+  grid.style.gridTemplateColumns = '';
+  grid.style.gridTemplateRows = '';
+  grid.innerHTML = `<div class="grid-empty">` +
+    `<div class="grid-empty-msg">${escapeHtml(msg)}</div>` +
+    (detail ? `<div class="grid-empty-detail">${escapeHtml(detail)}</div>` : '') +
+    (action ? `<button class="tool grid-empty-clear">${escapeHtml(action.label)}</button>` : '') +
+    `</div>`;
+  if(action) grid.querySelector('.grid-empty-clear').onclick = action.onClick;
+}
+
+function pageBounds(page, perPage, total){
+  const start = page*perPage;
+  return [start, Math.min(start+perPage, total)];
+}
+
+// 'col' mode's row axis is colFields itself (field names), not an
+// obsAt()-style index into a fixed-size axis -- pinning a field excludes it
+// from this the same way pinning an observation excludes it from visObs.
+// Applied uniformly regardless of stripOnRows()/expandedFieldRow so the
+// paged position space never shifts shape when *those* toggle -- only
+// pinning itself changes it, matching visObs's contract.
+function colFieldsForPaging(){
+  return pinnedColFields.size ? colFields.filter(f=>!pinnedColFields.has(f)) : colFields;
+}
+function colFieldAt(i){ return colFieldsForPaging()[i]; }
+
+// Row/column axis for the grid currently on screen — depends on mode.
+// 'row' mode only swaps the COLUMN axis (fields replace samples); the row
+// axis (observation ids) stays exactly as in 'data' mode.
+// 'col' mode only swaps the ROW axis (fields replace observations); the
+// column axis (sample ids) stays exactly as in 'data' mode.
+function rowsTotal(){ return mode==='col' ? colFieldsForPaging().length : (visObs ? visObs.length : meta.rows); }
+function colsTotal(){ return mode==='row' ? rowFields.length : (visSample ? visSample.length : meta.cols); }
+function fieldDisplay(axis, field){ return axisState[axis].renames[field] || field; }
+function rowLabel(i){ return mode==='col' ? fieldDisplay('sample', colFieldAt(i)) : meta.row_ids[obsAt(i)]; }
+function colLabel(j){ return mode==='row' ? fieldDisplay('observation', rowFields[j]) : meta.col_ids[sampleAt(j)]; }
+
+function formatMetaValue(v){
+  if(Array.isArray(v)) v = v.length ? v.join(', ') : null;
+  else if(v && typeof v === 'object') v = Object.entries(v).map(([k,x])=>`${k}=${x}`).join(', ');
+  if(v===null || v===undefined || v==='') return {text:'—', cls:'mv-empty'};
+  return {text:v, cls:'mv'};
+}
+
+// Find/replace is a display-only substring substitution over a field's
+// values -- it doesn't touch meta.row_metadata/col_metadata, so sorting,
+// filtering, and stats keep seeing the original values.
+function applyReplacements(axis, field, v){
+  const reps = axisState[axis].replacements.filter(r=>r.field===field);
+  if(!reps.length || v===null || v===undefined) return v;
+  let s = String(v);
+  reps.forEach(r=>{ s = s.split(r.find).join(r.replace); });
+  return s;
+}
+
+function metaCellAt(i, j){
+  // i = row index (grid row), j = col index (grid col)
+  if(mode==='row'){
+    // row axis = observation obsAt(i), col axis = field j (fields unaffected by filters)
+    const entry = meta.row_metadata && meta.row_metadata[obsAt(i)];
+    const field = rowFields[j];
+    return entry ? applyReplacements('observation', field, entry[field]) : null;
+  }
+  // mode==='col': row axis = field i (unaffected), col axis = sample sampleAt(j)
+  return metaCellForField(colFieldAt(i), j);
+}
+
+// Frozen field rows (col mode) already know their field directly -- no
+// position to run colFieldAt() on, same reasoning as metaCellAtRaw.
+function metaCellForField(field, j){
+  const entry = meta.col_metadata && meta.col_metadata[sampleAt(j)];
+  return entry ? applyReplacements('sample', field, entry[field]) : null;
+}
+
+// Pinned/frozen observation rows already have a raw index (they're excluded
+// from visObs, so there's no page position to run through obsAt()) --
+// metaCellAt(i,j)'s row-mode branch inlined against a raw index directly.
+// Only needed for 'row' mode; col-mode's own frozen fields use colFieldAt()
+// directly instead, since field pinning excludes by name, not by index.
+function metaCellAtRaw(rawIdx, j){
+  const entry = meta.row_metadata && meta.row_metadata[rawIdx];
+  const field = rowFields[j];
+  return entry ? applyReplacements('observation', field, entry[field]) : null;
+}
+
+// Missing-value tokens, mirrored from the backend's _MISSING_TOKENS
+// (field_summary) so a field the backend treats as numeric-with-some-NAs
+// doesn't get misclassified as categorical here just because "NA" isn't a JS number.
+const MISSING_TOKENS = new Set(['na', 'n/a', 'nan', 'null', 'none', '-']);
+// Sentinel checklist key for blank/missing entries -- distinct from any real
+// field value since it's not a plain string a metadata value could equal.
+const MISSING_KEY = '\u0000missing';
+
+// Distinct values for a categorical field's filter checklist, counted and
+// ranked by frequency (most common first), with a synthetic "(missing)" row
+// when any entries are blank. Computed client-side since the full metadata
+// array is already loaded -- no backend round trip needed.
+function distinctValues(axis, field){
+  const entries = axis==='observation' ? meta.row_metadata : meta.col_metadata;
+  const counts = new Map();
+  (entries||[]).forEach(e=>{
+    const raw = e ? e[field] : null;
+    const missing = raw===null || raw===undefined || raw==='';
+    const key = missing ? MISSING_KEY : String(raw);
+    const label = missing ? '(missing)' : String(raw);
+    const cur = counts.get(key) || {key, label, count:0};
+    cur.count++;
+    counts.set(key, cur);
+  });
+  return [...counts.values()].sort((a,b)=> b.count-a.count || a.label.localeCompare(b.label));
+}
+// Observed range of a numeric field, for the filter popover's placeholders.
+// Same present-value rules as fieldIsNumeric so the two agree on what counts.
+function numericBounds(axis, field){
+  const entries = axis==='observation' ? meta.row_metadata : meta.col_metadata;
+  let lo = Infinity, hi = -Infinity;
+  (entries||[]).forEach(e=>{
+    const v = e && e[field];
+    if(v===null || v===undefined || v==='') return;
+    if(typeof v==='string' && MISSING_TOKENS.has(v.trim().toLowerCase())) return;
+    const n = Number(v);
+    if(!isFinite(n)) return;
+    if(n<lo) lo=n;
+    if(n>hi) hi=n;
+  });
+  return lo<=hi ? {lo, hi} : null;
+}
+// Placeholders have to stay inside a 70px box, so long decimals get trimmed
+// -- they're a hint about scale, not a value to be read off precisely.
+function fmtBound(n){
+  if(Number.isInteger(n)) return String(n);
+  const a = Math.abs(n);
+  return a>=100 ? n.toFixed(0) : a>=1 ? n.toFixed(1) : n.toFixed(3);
+}
+function fieldIsNumeric(axis, field){
+  const entries = axis==='observation' ? meta.row_metadata : meta.col_metadata;
+  const present = (entries||[]).map(e=>e && e[field])
+    .filter(v=>v!==null && v!==undefined && v!=='' && !(typeof v==='string' && MISSING_TOKENS.has(v.trim().toLowerCase())));
+  if(!present.length) return false;
+  return present.every(v=>typeof v==='number' || (typeof v==='string' && v.trim()!=='' && !isNaN(Number(v))));
+}
+
+// Whether one filter matches one value. Shared by recomputeVisible (AND'ed
+// across all active filters on an axis) and filterMatchCount (one filter in
+// isolation, for the chip's "(N/M)" count) so the two can never drift apart.
+function filterMatches(f, v){
+  if(f.kind==='categorical'){
+    const missing = v===null || v===undefined || v==='';
+    const key = missing ? MISSING_KEY : String(v);
+    return !f.excluded.includes(key);
+  }
+  if(v===null || v===undefined || v==='') return false;
+  if(typeof v==='string' && MISSING_TOKENS.has(v.trim().toLowerCase())) return false;
+  const n = Number(v);
+  if(f.min!==null && n<f.min) return false;
+  if(f.max!==null && n>f.max) return false;
+  return true;
+}
+
+// How many entries on an axis one filter matches, ignoring any other active
+// filters on that axis -- an independent/marginal count, not the running
+// total after stacking. Avoids the count depending on filter order.
+function filterMatchCount(axis, f){
+  const entries = axis==='observation' ? meta.row_metadata : meta.col_metadata;
+  const total = axis==='observation' ? meta.rows : meta.cols;
+  let count = 0;
+  for(let i=0;i<total;i++){
+    const entry = entries && entries[i];
+    if(filterMatches(f, entry ? entry[f.field] : null)) count++;
+  }
+  return {count, total};
+}
+
+// Recompute visObs/visSample from current axisState. Called whenever a sort
+// or filter changes. Leaves the axis untouched (null) if nothing is active,
+// keeping the cheap contiguous fetch path for the common case.
+function recomputeVisible(axis){
+  const state = axisState[axis];
+  const entries = axis==='observation' ? meta.row_metadata : meta.col_metadata;
+  const total = axis==='observation' ? meta.rows : meta.cols;
+  // Pinned rows live in their own frozen block (see render()), not the
+  // normal paged flow -- excluding them here, the same way a filter
+  // already excludes rows, means rowsTotal()/pageBounds()/obsAt() all
+  // keep working unmodified for everything downstream of visObs.
+  const pinnedActive = axis==='observation' && pinnedObs.size>0;
+  const active = state.filters.length>0 || state.sortDir!==0 || pinnedActive;
+  let result = null;
+  if(active){
+    let idxs = [];
+    for(let i=0;i<total;i++) idxs.push(i);
+    state.filters.forEach(f=>{
+      idxs = idxs.filter(i=>{
+        const entry = entries && entries[i];
+        return filterMatches(f, entry ? entry[f.field] : null);
+      });
+    });
+    if(pinnedActive) idxs = idxs.filter(i=>!pinnedObs.has(i));
+    if(state.sortDir!==0){
+      const field = state.sortField;
+      const numeric = fieldIsNumeric(axis, field);
+      idxs = idxs.slice().sort((a,b)=>{
+        const va = entries[a] ? entries[a][field] : null;
+        const vb = entries[b] ? entries[b][field] : null;
+        let cmp;
+        if(numeric) cmp = Number(va) - Number(vb);
+        else cmp = String(va).localeCompare(String(vb));
+        return state.sortDir * cmp;
+      });
+    }
+    result = idxs;
+  }
+  if(axis==='observation') visObs = result; else visSample = result;
+}
+
+// --- search ---------------------------------------------------------------
+let idxSamples=[], idxTaxa=[], idxRowFields=[], idxColFields=[], idxValues=[];
+
+function buildSearchIndex(){
+  idxSamples = meta.col_ids.map((id,i)=>({type:'sample', label:id, i}));
+  idxTaxa = meta.row_ids.map((id,i)=>({type:'taxon', label:id, i}));
+  idxRowFields = rowFields.map((f,i)=>({type:'rowField', label:f, i}));
+  idxColFields = colFields.map((f,i)=>({type:'colField', label:f, i}));
+  idxValues = [];
+  (meta.row_metadata||[]).forEach((entry,i)=>{
+    if(!entry) return;
+    rowFields.forEach((f,fi)=>{
+      const {text, cls} = formatMetaValue(entry[f]);
+      if(cls==='mv-empty') return;
+      idxValues.push({type:'rowValue', field:f, fi, value:String(text), i, id:meta.row_ids[i]});
+    });
+  });
+  (meta.col_metadata||[]).forEach((entry,i)=>{
+    if(!entry) return;
+    colFields.forEach((f,fi)=>{
+      const {text, cls} = formatMetaValue(entry[f]);
+      if(cls==='mv-empty') return;
+      idxValues.push({type:'colValue', field:f, fi, value:String(text), i, id:meta.col_ids[i]});
+    });
+  });
+}
+
+function escapeHtml(s){
+  return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+// startswith beats contains; -1 = no match
+function matchScore(label, q){
+  const li = String(label).toLowerCase().indexOf(q);
+  return li<0 ? -1 : (li===0 ? 0 : 1);
+}
+
+// exact beats startswith beats contains; -1 = no match
+function valueScore(value, q){
+  const v = String(value).toLowerCase();
+  if(v===q) return 0;
+  const li = v.indexOf(q);
+  return li<0 ? -1 : (li===0 ? 1 : 2);
+}
+
+// "field=value" or "field:value" -> {field, value}; null if q has no separator
+function parseFieldQuery(q){
+  const m = q.match(/^([^=:]+)[=:](.*)$/);
+  if(!m) return null;
+  const field = m[1].trim();
+  const value = m[2].trim();
+  if(!field || !value) return null;
+  return {field, value};
+}
+
+let searchFlat=[], searchHiIdx=-1;
+let searchGroups={}, searchTab='all';
+// The two matched-substring queries currently driving the result list --
+// separate because a "field=value" query (see parseFieldQuery) matches
+// values against fq.value while label kinds (taxa/samples/fields) don't
+// match at all, so highlighting can't just reuse one shared `q`.
+let searchQuery = '', searchValueQuery = '';
+// 'All' shows a taste of each type; a single-type tab shows the long list, which
+// the panel scrolls. ponytail: plain slice, virtualize only if 200 rows drag.
+const ALL_CAP = 6, TAB_CAP = 200;
+const SEARCH_KINDS = [
+  // 'Taxa' was a third name for the observation axis, sitting next to
+  // 'Observation fields' in the same tab strip. The internal key stays taxa.
+  ['samples', 'Samples'], ['taxa', 'Observations'],
+  ['rowFields', 'Observation fields'], ['colFields', 'Sample fields'], ['values', 'Values'],
+];
+
+// Long hierarchical identifiers (taxonomy strings) sharing a common prefix
+// were rendering as indistinguishable end-truncated blobs with no sign of
+// *why* they matched (see live preview: searching "Bacteroides" against
+// taxa returned 6 rows that all read identically up to the ellipsis).
+// Highlights the match and, if the string doesn't fit, centers a truncation
+// window on the match instead of always cutting from the end -- so the
+// matched substring stays visible regardless of where it falls.
+const SR_MAX_CHARS = 70;
+function highlightAround(text, q){
+  const s = String(text);
+  if(!q) return escapeHtml(s);
+  const idx = s.toLowerCase().indexOf(q);
+  if(idx<0) return escapeHtml(s);
+  let start = 0, end = s.length, prefix = '', suffix = '';
+  if(s.length > SR_MAX_CHARS){
+    const half = Math.max(0, Math.floor((SR_MAX_CHARS - q.length) / 2));
+    start = Math.max(0, idx - half);
+    end = Math.min(s.length, idx + q.length + half);
+    if(start>0) prefix = '…';
+    if(end<s.length) suffix = '…';
+  }
+  return prefix + escapeHtml(s.slice(start, idx)) + '<mark>' + escapeHtml(s.slice(idx, idx+q.length)) + '</mark>' +
+    escapeHtml(s.slice(idx+q.length, end)) + suffix;
+}
+
+function searchRowHtml(e){
+  return e.type==='rowValue' || e.type==='colValue'
+    ? `<span class="sr-field">${escapeHtml(e.field)}:</span> ${highlightAround(e.value, searchValueQuery)}  —  ${escapeHtml(e.id)}`
+    : highlightAround(e.label, searchQuery);
+}
+
+function runSearch(raw){
+  const q = raw.trim().toLowerCase();
+  const results = document.getElementById('searchResults');
+  searchFlat = [];
+  searchHiIdx = -1;
+  if(!q){ results.classList.remove('open'); results.innerHTML=''; searchGroups={}; return; }
+
+  const byLabel = arr => arr.map(e=>({e, s:matchScore(e.label, q)})).filter(x=>x.s>=0)
+    .sort((a,b)=>a.s-b.s).map(x=>x.e);
+  const byValue = (arr, valueQ) => arr.map(e=>({e, s:valueScore(e.value, valueQ)})).filter(x=>x.s>=0)
+    .sort((a,b)=>a.s-b.s).map(x=>x.e);
+
+  // direct field search, e.g. "subject_id=501" — restrict to matching fields, skip other kinds
+  const fq = parseFieldQuery(q);
+  if(fq){
+    const fieldMatch = e => e.field.toLowerCase().includes(fq.field);
+    searchGroups = {
+      samples: [], taxa: [], rowFields: [], colFields: [],
+      values: byValue(idxValues.filter(fieldMatch), fq.value),
+    };
+    searchQuery = ''; searchValueQuery = fq.value;
+  } else {
+    searchGroups = {
+      samples: byLabel(idxSamples),
+      taxa: byLabel(idxTaxa),
+      rowFields: byLabel(idxRowFields),
+      colFields: byLabel(idxColFields),
+      values: byValue(idxValues, q),
+    };
+    searchQuery = q; searchValueQuery = q;
+  }
+  searchTab = 'all';
+  renderSearchPanel();
+}
+
+function renderSearchPanel(){
+  const results = document.getElementById('searchResults');
+  searchFlat = [];
+  searchHiIdx = -1;
+
+  const live = SEARCH_KINDS.filter(([k])=>searchGroups[k] && searchGroups[k].length);
+  const total = live.reduce((n,[k])=>n+searchGroups[k].length, 0);
+  if(!total){
+    results.innerHTML = '<div class="sr-empty">No matches</div>';
+    results.classList.add('open');
+    return;
+  }
+
+  // With only one kind of match, "All 14" / "Taxa 14" / a "TAXA" group
+  // caption are three labels for the same fourteen rows, and the tab pair
+  // offers a choice between two identical lists. Collapse to one label.
+  const soleGroup = live.length===1;
+  let html = `<div class="stabs">`;
+  if(!soleGroup) html += `<div class="stab${searchTab==='all'?' active':''}" data-tab="all">All<span class="n">${total}</span></div>`;
+  live.forEach(([k,cap])=>{
+    html += `<div class="stab${(soleGroup||searchTab===k)?' active':''}" data-tab="${k}">${cap}<span class="n">${searchGroups[k].length}</span></div>`;
+  });
+  html += `</div>`;
+
+  const group = (k, cap, limit, moreTab)=>{
+    const matches = searchGroups[k];
+    if(!matches.length) return '';
+    let h = `<div class="sg">` + (cap ? `<div class="sg-cap">${cap}</div>` : '');
+    matches.slice(0, limit).forEach(e=>{
+      h += `<div class="sr" data-i="${searchFlat.length}">${searchRowHtml(e)}</div>`;
+      searchFlat.push(e);
+    });
+    const rest = matches.length - Math.min(limit, matches.length);
+    if(rest) h += moreTab
+      ? `<div class="sr-more" data-tab="${k}">+${rest} more — show all</div>`
+      : `<div class="sr-more">+${rest} more — refine your search</div>`;
+    return h + `</div>`;
+  };
+
+  // soleGroup gets TAB_CAP, not ALL_CAP: ALL_CAP's shorter list relies on a
+  // "show all" tab to expand it, and with one group there is no second tab
+  // to switch to -- capping at 6 with no way past it would be a dead end.
+  html += soleGroup
+    ? group(live[0][0], '', TAB_CAP, false)
+    : searchTab==='all'
+    ? live.map(([k,cap])=>group(k, cap, ALL_CAP, true)).join('')
+    : group(searchTab, SEARCH_KINDS.find(([k])=>k===searchTab)[1], TAB_CAP, false);
+
+  results.innerHTML = html;
+  results.classList.add('open');
+  results.querySelectorAll('.sr').forEach(el=>{
+    el.addEventListener('click', ()=>selectSearchResult(parseInt(el.dataset.i)));
+  });
+  results.querySelectorAll('.stab,.sr-more[data-tab]').forEach(el=>{
+    el.addEventListener('click', ()=>{ searchTab = el.dataset.tab; renderSearchPanel(); });
+  });
+}
+
+// tab order for keyboard cycling: All, then the types that actually matched
+function searchTabOrder(){
+  return ['all', ...SEARCH_KINDS.filter(([k])=>searchGroups[k] && searchGroups[k].length).map(([k])=>k)];
+}
+
+function highlightResult(i){
+  const els = document.querySelectorAll('#searchResults .sr');
+  els.forEach(el=>el.classList.remove('hi'));
+  searchHiIdx = i;
+  if(i>=0 && els[i]){ els[i].classList.add('hi'); els[i].scrollIntoView({block:'nearest'}); }
+}
+
+function selectSearchResult(i){
+  const e = searchFlat[i];
+  if(!e) return;
+  jumpTo(e);
+  if(!searchPinned) document.getElementById('searchResults').classList.remove('open');
+}
+
+async function jumpTo(entry){
+  document.getElementById('searchBox').blur();
+  if(entry.type==='sample'){
+    setMode('data');
+    const pos = resolveAxisPosition('sample', entry.i);
+    colPage = Math.floor(pos / colsPerPage());
+    selR = null; selC = pos;
+  } else if(entry.type==='taxon'){
+    setMode('data');
+    selectObservationRow(entry.i);
+    selC = null;
+  } else if(entry.type==='rowField'){
+    setMode('row');
+    colPage = Math.floor(entry.i / colsPerPage());
+    selR = null; selC = entry.i;
+  } else if(entry.type==='colField'){
+    setMode('col');
+    selectColField(colFields[entry.i]);
+    selC = null;
+  } else if(entry.type==='rowValue'){
+    setMode('row');
+    selectObservationRow(entry.i);
+    colPage = Math.floor(entry.fi / colsPerPage());
+    selC = entry.fi;
+  } else if(entry.type==='colValue'){
+    setMode('col');
+    const pos = resolveAxisPosition('sample', entry.i);
+    rowPage = Math.floor(entry.fi / rowsPerPage());
+    colPage = Math.floor(pos / colsPerPage());
+    selR = entry.fi; selC = pos;
+  }
+  await render();
+  const label = entry.type==='rowValue' ? `${entry.id}  |  ${entry.field}${SEL_EQ}${entry.value}`
+    : entry.type==='colValue' ? `${entry.field}  |  ${entry.id}${SEL_EQ}${entry.value}`
+    : entry.label;
+  showSelected(label);
+}
+
+async function render(){
+  computeFit();
+  const [r0,r1] = pageBounds(rowPage, rowsPerPage(), rowsTotal());
+  const [c0,c1] = pageBounds(colPage, colsPerPage(), colsTotal());
+  // Which axis holds what depends on the mode, and the pager has to name the
+  // thing it is actually paging: only 'col' mode puts fields down the side
+  // (the old test was mode==='data', which mislabelled 'row' mode's
+  // observations as "fields"), and only 'row' mode puts fields across the top.
+  const rowWord = mode==='col' ? 'fields' : 'observations';
+  const colWord = mode==='row' ? 'fields' : 'samples';
+  // "observations 1-0 / 0" when a filter matches nothing -- count the empty
+  // case out rather than letting the arithmetic print a range that runs
+  // backwards.
+  document.getElementById('rowRange').textContent = rowsTotal()===0
+    ? `no ${rowWord}` : `${rowWord} ${r0+1}-${r1} / ${rowsTotal()}`;
+  document.getElementById('colRange').textContent = colsTotal()===0
+    ? `no ${colWord}` : `${colWord} ${c0+1}-${c1} / ${colsTotal()}`;
+  // Red = a filter (not just a sort) actually shrank this axis below its
+  // full count -- the fields axis (rowFields/colFields) is never filtered,
+  // so only flag the id axis in the modes where it's actually on screen.
+  document.getElementById('rowRange').classList.toggle('range-filtered',
+    mode!=='col' && !!visObs && visObs.length<meta.rows);
+  document.getElementById('colRange').classList.toggle('range-filtered',
+    mode!=='row' && !!visSample && visSample.length<meta.cols);
+  renderHeatLegend();
+  document.getElementById('rowUp').disabled = rowPage===0;
+  document.getElementById('rowDown').disabled = r1>=rowsTotal();
+  document.getElementById('colPrev').disabled = colPage===0;
+  document.getElementById('colNext').disabled = c1>=colsTotal();
+
+  // A filter can legitimately match nothing, and the grid had no answer for
+  // it: gridTemplateColumns became `repeat(0, 130px)`, which is invalid CSS,
+  // so the browser dropped the whole declaration and auto-placed every row
+  // header across implicit columns -- the table dissolved into a wrapped
+  // heap of orange chips. Say what happened instead, and offer the way out.
+  if(rowsTotal()===0 || colsTotal()===0){
+    const emptyWord = colsTotal()===0
+      ? (mode==='row' ? 'fields' : 'samples')
+      : (mode==='col' ? 'fields' : 'observations');
+    showGridMessage(`No ${emptyWord} match the current filters`, '',
+      {label: 'Clear all filters', onClick: clearAllChips});
+    return;
+  }
+
+  // Pinned rows are scoped to data/row mode and already excluded from
+  // visObs (see recomputeVisible) -- sorted by raw index for a stable,
+  // predictable frozen-block order that doesn't reshuffle on pin/unpin.
+  const pinnedRaw = (mode==='data'||mode==='row') ? [...pinnedObs].sort((a,b)=>a-b) : [];
+  // 'col' mode's frozen rows are fields, not observations -- order follows
+  // colFields' own (stable, delete/undelete-only) order rather than Set
+  // insertion order, for the same reshuffle-avoidance reason as above.
+  const pinnedFieldsOrdered = mode==='col' ? colFields.filter(f=>pinnedColFields.has(f)) : [];
+  const pinnedCount = (mode==='data'||mode==='row') ? pinnedRaw.length : pinnedFieldsOrdered.length;
+
+  let data = null, pinnedData = null;
+  if(mode==='data'){
+    const colIdxs = []; for(let j=c0;j<c1;j++) colIdxs.push(sampleAt(j));
+    let bodyFetch;
+    if(visObs || visSample){
+      const rowIdxs = []; for(let i=r0;i<r1;i++) rowIdxs.push(obsAt(i));
+      bodyFetch = window.pywebview.api.data_window_idx(rowIdxs, colIdxs);
+    } else {
+      bodyFetch = window.pywebview.api.data_window(r0, r1, c0, c1);
+    }
+    const pinnedFetch = pinnedRaw.length
+      ? window.pywebview.api.data_window_idx(pinnedRaw, colIdxs)
+      : Promise.resolve([]);
+    [data, pinnedData] = await Promise.all([bodyFetch, pinnedFetch]);
+  }
+
+  // Stretch to fill availH x availW, but never past the auto-fit page size —
+  // a partial last page keeps normal-height rows instead of ballooning.
+  const renderedRows = r1-r0, renderedCols = c1-c0;
+  const fieldExpandedIdx = (mode==='col' && !stripOnRows() && expandedFieldRow!=null
+    && expandedFieldRow>=r0 && expandedFieldRow<r1) ? expandedFieldRow : null;
+  let headerRowHPx, rowHeights = null;
+  if(stripOnRows()){
+    // Column headers stay short; only the field rows below need the tall
+    // track, so the header doesn't compete with them for height. Frozen
+    // fields get the same tall track in this view (see the frozen-block
+    // build below), so their fixed pixel cost has to come out of the same
+    // budget before the paged rows stretch to fill what's left.
+    headerRowHPx = shortRowHPx();
+    const pinnedBlockPx = pinnedCount * statRowH();
+    rowHPx = Math.max(statRowH(), (availH - headerRowHPx - pinnedBlockPx) / Math.max(renderedRows, rowsPerPage()));
+  } else if(fieldExpandedIdx!=null){
+    // Only the expanded row gets the tall stat track; everyone else stays
+    // at natural short height instead of stretching to fill availH. Frozen
+    // fields are never the expanded one (pinning excludes a field from the
+    // paged position space that expandedFieldRow indexes into), so they
+    // always use the short track -- computeFit() already reserved that.
+    headerRowHPx = shortRowHPx();
+    // Same fill-the-window rule as the plain branch below: with every field
+    // already on screen there is no next page to stay comparable with, and
+    // the tall summary row makes the leftover gap below the table bigger,
+    // not smaller. Only the short rows grow -- the expanded one is sized by
+    // its content. Skipped when fields are frozen, since their track is
+    // budgeted separately in computeFit and double-counting it here would
+    // push the grid past availH.
+    const shortCount = renderedRows - 1;
+    if(pinnedCount===0 && shortCount>0 && renderedRows >= rowsTotal()){
+      const slack = availH - (headerRowHPx + statRowH() + shortCount*shortRowHPx());
+      if(slack > 0) headerRowHPx = Math.min(shortRowHPx() + slack/(shortCount+1), shortRowHPx()*1.8);
+    }
+    rowHeights = [];
+    for(let r=r0;r<r1;r++) rowHeights.push(r===fieldExpandedIdx ? statRowH() : headerRowHPx);
+  } else {
+    // Frozen rows use a fixed shortRowHPx() track (see gridTemplateRows
+    // below), not this branch's stretchy rowHPx -- subtract their pixel
+    // cost first so the paged rows' stretch target doesn't silently push
+    // the grid's total height past availH by the frozen block's height.
+    const pinnedBlockPx = pinnedCount * shortRowHPx()
+      + (expandedPinnedField!=null ? statRowH() - shortRowHPx() : 0);
+    // When every row of the axis is on screen there is no next page to keep
+    // row heights comparable with, so sizing for a full page just leaves a
+    // hard-edged table floating in a third of a window of nothing -- which
+    // reads as a rendering failure rather than as "that's all the data".
+    // Stretch to fill instead, capped at 1.8x so a two-field table gets
+    // comfortable rows rather than absurd ones.
+    const allOnOnePage = renderedRows + pinnedCount >= rowsTotal();
+    const divisor = allOnOnePage ? renderedRows + 1 : Math.max(renderedRows, rowsPerPage()) + 1;
+    rowHPx = (availH - pinnedBlockPx) / divisor;
+    if(allOnOnePage) rowHPx = Math.min(rowHPx, shortRowHPx() * 1.8);
+    headerRowHPx = rowHPx;
+  }
+  colWPx = availW/renderedCols;
+
+  // Fetch stats for every visible row/column up front, in parallel, so the
+  // grid below can be built synchronously once everything has arrived.
+  const colStats = stripOnCols()
+    ? await Promise.all(Array.from({length: renderedCols}, (_, k) => colStatsFetch(c0+k)))
+    : null;
+  const rowStats = stripOnRows()
+    ? await Promise.all(Array.from({length: renderedRows}, (_, k) => window.pywebview.api.field_summary('sample', colFieldAt(r0+k), visSample)))
+    : null;
+  // Pinned fields render as stat rows too when the strip view is on (see
+  // the frozen-block build below) -- fetch their stats the same way.
+  const pinnedFieldStats = (stripOnRows() && pinnedFieldsOrdered.length)
+    ? await Promise.all(pinnedFieldsOrdered.map(f => window.pywebview.api.field_summary('sample', f, visSample)))
+    : null;
+  const fieldExpandedStat = fieldExpandedIdx!=null
+    ? await window.pywebview.api.field_summary('sample', colFieldAt(fieldExpandedIdx), visSample)
+    : null;
+  const pinnedFieldExpandedStat = (expandedPinnedField!=null && !stripOnRows())
+    ? await window.pywebview.api.field_summary('sample', expandedPinnedField, visSample)
+    : null;
+
+  const grid = document.getElementById('grid');
+  const statRowTrack = stripOnCols() ? `${statRowH()}px ` : '';
+  const pinnedFieldRowH = stripOnRows() ? statRowH() : shortRowHPx();
+  const pinnedTrack = pinnedRaw.length ? `repeat(${pinnedRaw.length}, ${shortRowHPx()}px) `
+    : pinnedFieldsOrdered.length
+      ? pinnedFieldsOrdered.map(f => `${f===expandedPinnedField ? statRowH() : pinnedFieldRowH}px`).join(' ') + ' '
+      : '';
+  const rowsTrack = rowHeights ? rowHeights.map(h=>`${h}px`).join(' ') : `repeat(${renderedRows}, ${rowHPx}px)`;
+  // Clearing the filter that emptied the grid has to put display:grid back;
+  // otherwise the recovered table renders through the empty state's flex
+  // layout and every cell lands in one row.
+  grid.classList.remove('grid-empty-state');
+  grid.classList.toggle('col-stats', stripOnCols());
+  grid.style.gridTemplateColumns = `${RHW}px repeat(${renderedCols}, ${colWPx}px)`;
+  grid.style.gridTemplateRows = `${headerRowHPx}px ${statRowTrack}${pinnedTrack}${rowsTrack}`;
+  grid.innerHTML = '';
+
+  const corner = document.createElement('div');
+  corner.className = 'cell hdr';
+  grid.appendChild(corner);
+  for(let c=c0;c<c1;c++){
+    const label = colLabel(c);
+    const h = document.createElement('div');
+    h.className = 'cell hdr colhdr';
+    h.title = label;
+    h.dataset.c = c;
+    h.textContent = label;
+    if(mode==='row'){
+      h.dataset.ctxAxis = 'observation';
+      h.dataset.ctxField = rowFields[c];
+    }
+    h.addEventListener('click', (e)=>{
+      selR=null; selPinnedRaw=null; selPinnedField=null; selC=c;
+      showSelected(label);
+      applyHighlight();
+    });
+    h.addEventListener('dblclick', ()=>{ toggleSummary(); });
+    grid.appendChild(h);
+  }
+  if(stripOnCols()){
+    grid.appendChild(fillerCell());
+    colStats.forEach((s, i) => {
+      const cell = statCell(s, colLabel(c0 + i));
+      cell.dataset.c = c0 + i; // so applyHighlight() treats it as part of its column
+      grid.appendChild(cell);
+    });
+  }
+  // Frozen block: pinned rows always render here, above the paginated body,
+  // regardless of which page rowPage is on -- they were already excluded
+  // from visObs (see recomputeVisible), so there's no overlap to dedupe.
+  pinnedRaw.forEach((rawIdx, pi) => {
+    const label = meta.row_ids[rawIdx];
+    const isLast = pi === pinnedRaw.length - 1;
+    const rh = document.createElement('div');
+    rh.className = 'cell rh' + (isLast ? ' pin-last' : '');
+    rh.textContent = label;
+    rh.title = label;
+    rh.dataset.pinnedRaw = rawIdx;
+    rh.dataset.ctxPinRaw = rawIdx;
+    rh.addEventListener('click', (e)=>{
+      selR=null; selC=null; selPinnedRaw=rawIdx; selPinnedField=null;
+      showSelected(label);
+      applyHighlight();
+    });
+    grid.appendChild(rh);
+    for(let c=c0;c<c1;c++){
+      const cell = document.createElement('div');
+      cell.dataset.pinnedRaw = rawIdx; cell.dataset.c = c;
+      if(mode==='data'){
+        const v = pinnedData[pi][c-c0];
+        cell.className = 'cell ' + (v===0 ? 'z' : 'nz' + heatBucket(v)) + (isLast ? ' pin-last' : '');
+        cell.textContent = Number.isInteger(v) ? v : v.toFixed(3);
+        cell.title = `${label}\n${colLabel(c)} = ${v}`;
+        cell.addEventListener('click', ()=>{
+          selR=null; selC=c; selPinnedRaw=rawIdx; selPinnedField=null;
+          showSelected(`${label}  |  ${colLabel(c)}${SEL_EQ}${v}`, v);
+          applyHighlight();
+        });
+      } else {
+        const raw = metaCellAtRaw(rawIdx, c);
+        const {text, cls} = formatMetaValue(raw);
+        cell.className = 'cell ' + cls + (isLast ? ' pin-last' : '');
+        cell.textContent = text;
+        cell.title = `${label}\n${colLabel(c)} = ${text}`;
+        cell.addEventListener('click', ()=>{
+          selR=null; selC=c; selPinnedRaw=rawIdx; selPinnedField=null;
+          showSelected(`${label}  |  ${colLabel(c)}${SEL_EQ}${text}`, raw);
+          applyHighlight();
+        });
+      }
+      grid.appendChild(cell);
+    }
+  });
+  // Same idea, one axis over: pinned fields (col mode) always render here
+  // too, using the same stat-strip-vs-plain branch as the paginated fields
+  // below so a pinned field still shows its stats when that view is on --
+  // never the single-expanded-field view, since a field can't be both
+  // pinned (excluded from the paged position space) and expandedFieldRow
+  // (a position within it) at once.
+  pinnedFieldsOrdered.forEach((field, pi) => {
+    const label = fieldDisplay('sample', field);
+    const isLast = pi === pinnedFieldsOrdered.length - 1;
+    const rh = document.createElement('div');
+    rh.className = 'cell rh' + (isLast ? ' pin-last' : '');
+    if(stripOnRows()){
+      rh.classList.add('rh-stats');
+      rh.innerHTML = `<div class="stat-line rh-label">${escapeHtml(label)}</div>` + statCellHtml(pinnedFieldStats[pi]);
+      wireStatOther(rh, pinnedFieldStats[pi], label);
+    } else if(field===expandedPinnedField){
+      rh.classList.add('rh-stats');
+      rh.innerHTML = `<div class="stat-line rh-label">${escapeHtml(label)}</div>` + statCellHtml(pinnedFieldExpandedStat);
+      wireStatOther(rh, pinnedFieldExpandedStat, label);
+    } else {
+      rh.textContent = label;
+      rh.dataset.ctxAxis = 'sample';
+      rh.dataset.ctxField = field;
+    }
+    rh.title = label;
+    rh.dataset.pinnedField = field;
+    rh.dataset.ctxPinField = field;
+    rh.addEventListener('click', (e)=>{
+      selR=null; selC=null; selPinnedField=field; selPinnedRaw=null;
+      showSelected(label);
+      applyHighlight();
+    });
+    if(mode==='col') rh.addEventListener('dblclick', ()=>{ toggleFieldRowPinned(field); });
+    grid.appendChild(rh);
+    for(let c=c0;c<c1;c++){
+      const cell = document.createElement('div');
+      cell.dataset.pinnedField = field; cell.dataset.c = c;
+      const raw = metaCellForField(field, c);
+      const {text, cls} = formatMetaValue(raw);
+      cell.className = 'cell ' + cls + (isLast ? ' pin-last' : '');
+      cell.textContent = text;
+      cell.title = `${label}\n${colLabel(c)} = ${text}`;
+      cell.addEventListener('click', ()=>{
+        selR=null; selC=c; selPinnedField=field; selPinnedRaw=null;
+        showSelected(`${label}  |  ${colLabel(c)}${SEL_EQ}${text}`, raw);
+        applyHighlight();
+      });
+      grid.appendChild(cell);
+    }
+  });
+  for(let r=r0;r<r1;r++){
+    const label = rowLabel(r);
+    const rh = document.createElement('div');
+    rh.className = 'cell rh';
+    if(stripOnRows()){
+      rh.classList.add('rh-stats');
+      rh.innerHTML = `<div class="stat-line rh-label">${escapeHtml(label)}</div>` + statCellHtml(rowStats[r-r0]);
+      wireStatOther(rh, rowStats[r-r0], label);
+    } else if(r===fieldExpandedIdx){
+      rh.classList.add('rh-stats');
+      rh.innerHTML = `<div class="stat-line rh-label">${escapeHtml(label)}</div>` + statCellHtml(fieldExpandedStat);
+      wireStatOther(rh, fieldExpandedStat, label);
+    } else if(mode==='col'){
+      const field = colFieldAt(r);
+      rh.textContent = label;
+      rh.dataset.ctxAxis = 'sample';
+      rh.dataset.ctxField = field;
+      rh.dataset.ctxPinField = field;
+    } else {
+      rh.textContent = label;
+      rh.dataset.ctxPinRaw = obsAt(r);
+    }
+    rh.title = label;
+    rh.dataset.r = r;
+    rh.addEventListener('click', (e)=>{
+      selR=r; selC=null; selPinnedRaw=null; selPinnedField=null;
+      showSelected(label);
+      applyHighlight();
+    });
+    rh.addEventListener('dblclick', ()=>{
+      if(mode==='col') toggleFieldRow(r);
+      else toggleSummary(r);
+    });
+    grid.appendChild(rh);
+    for(let c=c0;c<c1;c++){
+      const cell = document.createElement('div');
+      cell.dataset.r = r; cell.dataset.c = c;
+      if(mode==='data'){
+        const v = data[r-r0][c-c0];
+        cell.className = 'cell ' + (v===0 ? 'z' : 'nz' + heatBucket(v));
+        cell.textContent = Number.isInteger(v) ? v : v.toFixed(3);
+        cell.title = `${rowLabel(r)}\n${colLabel(c)} = ${v}`;
+        cell.addEventListener('click', ()=>{
+          selR=r; selC=c; selPinnedRaw=null; selPinnedField=null;
+          showSelected(`${rowLabel(r)}  |  ${colLabel(c)}${SEL_EQ}${v}`, v);
+          applyHighlight();
+        });
+      } else {
+        const raw = metaCellAt(r, c);
+        const {text, cls} = formatMetaValue(raw);
+        cell.className = 'cell ' + cls;
+        cell.textContent = text;
+        cell.title = `${rowLabel(r)}\n${colLabel(c)} = ${text}`;
+        cell.addEventListener('click', ()=>{
+          selR=r; selC=c; selPinnedRaw=null; selPinnedField=null;
+          showSelected(`${rowLabel(r)}  |  ${colLabel(c)}${SEL_EQ}${text}`, raw);
+          applyHighlight();
+        });
+      }
+      // Data cells beside an expanded field summary are ~4x the normal row
+      // height purely to make room for the summary next to them -- nothing
+      // extra to show, just one value stranded at the top of a tall box.
+      // At that size the ordinary selection tint stops reading as "this row
+      // is selected" and turns into a solid slab of colour dominating the
+      // screen, so .cell-expanded-row dials it back.
+      if(r===fieldExpandedIdx) cell.classList.add('cell-expanded-row');
+      grid.appendChild(cell);
+    }
+  }
+  applyHighlight();
+}
+
+// ponytail: pywebview's page isn't a secure context, so navigator.clipboard is
+// undefined and reading .writeText threw — killing the click handler before it
+// could highlight.
+// Called from ⌘C only. Selecting a cell used to copy it as a side effect,
+// which meant every glance at a value silently destroyed whatever you were
+// carrying on the clipboard -- and since arrow keys now move the selection,
+// a single held keypress would have done it dozens of times. Looking is not
+// taking; copying is its own gesture.
+function copySelected(){
+  const inp=document.getElementById('selected');
+  inp.focus(); inp.select();
+  let ok=false;
+  try{ ok = document.execCommand('copy'); }catch(err){}
+  if(!ok && navigator.clipboard) navigator.clipboard.writeText(inp.value).catch(()=>{});
+  // Copy is already done by this point -- collapse the selection and drop
+  // focus so the readout reads as a plain value display (Excel's cell-
+  // reference box) instead of looking permanently "selected" like blue-
+  // highlighted text. The user can still click in and drag-select manually.
+  inp.setSelectionRange(0, 0);
+  inp.blur();
+}
+
+// Same non-secure-context issue as copySelected: navigator.clipboard is
+// undefined under pywebview, so every modal Copy button needs the
+// execCommand fallback via a throwaway textarea instead of calling it directly.
+function writeClipboard(text, what){
+  if(navigator.clipboard){ navigator.clipboard.writeText(text).catch(()=>execCommandCopy(text)); }
+  else{ execCommandCopy(text); }
+  // The modal Copy buttons had no feedback at all -- nothing moves, and the
+  // clipboard is somewhere else. The grid's own copy path passes no `what`
+  // because it already flashes the selection bar.
+  if(what) toast('Copied ' + what);
+}
+function execCommandCopy(text){
+  const ta=document.createElement('textarea');
+  ta.value=text; ta.style.position='fixed'; ta.style.opacity='0';
+  document.body.appendChild(ta);
+  ta.focus(); ta.select();
+  try{ document.execCommand('copy'); }catch(err){}
+  document.body.removeChild(ta);
+}
+
+// `raw` is the underlying cell/field value alone (no "row | col =" framing) --
+// what the expand button (⤢, ⌘⏎) shows full-size and pretty-printed if it's
+// JSON. Falls back to `text` for calls (header clicks, status messages) that
+// have no separate raw value.
+let lastSelectedValue = '', lastSelectedLabel = '';
+function showSelected(text, raw){
+  lastSelectedValue = raw!==undefined ? raw : text;
+  // The expanded view is a modal that covers the grid, so by the time you
+  // are reading it the row and column it came from are behind a blur. It
+  // said "Cell content" and nothing else; now it says which cell.
+  // indexOf on the literal separator rather than a regex: SCRIPT is a plain
+  // (non-raw) Python string, so a JS regex with \\s in it is an invalid
+  // Python escape -- it happens to survive today but Python already warns
+  // and will eventually stop passing it through.
+  const eq = text.indexOf(SEL_EQ);
+  lastSelectedLabel = (raw!==undefined && eq>=0) ? text.slice(0, eq) : text;
+  const inp=document.getElementById('selected');
+  inp.value = text;
+  inp.classList.add('flash');
+  clearTimeout(showSelected._t);
+  showSelected._t = setTimeout(()=>inp.classList.remove('flash'), 700);
+}
+
+// Transient confirmation in the readout bar. Deliberately not a replacement
+// of the readout's text: the value you just copied is the thing you most
+// want still on screen a second later.
+function flashSelected(msg){
+  const badge = document.getElementById('copiedBadge');
+  badge.textContent = msg;
+  badge.classList.add('on');
+  clearTimeout(flashSelected._t);
+  flashSelected._t = setTimeout(()=>badge.classList.remove('on'), 1600);
+}
+
+function prettyPrintValue(v){
+  if(v && typeof v === 'object') return JSON.stringify(v, null, 2);
+  const s = String(v);
+  try{ return JSON.stringify(JSON.parse(s), null, 2); }
+  catch(e){ return s; }
+}
+
+function openCellModal(){
+  const title = document.getElementById('cellTitle');
+  title.textContent = lastSelectedLabel || 'Cell content';
+  title.title = lastSelectedLabel;
+  document.getElementById('cellBlock').textContent = prettyPrintValue(lastSelectedValue);
+  document.getElementById('cellOverlay').classList.add('open');
+}
+document.getElementById('expandBtn').onclick = openCellModal;
+document.getElementById('cellCopy').onclick = ()=>{
+  writeClipboard(document.getElementById('cellBlock').textContent, 'cell value');
+};
+document.getElementById('cellClose').onclick = ()=>document.getElementById('cellOverlay').classList.remove('open');
+document.getElementById('cellOverlay').addEventListener('click', (e)=>{
+  if(e.target.id === 'cellOverlay') e.currentTarget.classList.remove('open');
+});
+
+let lastValuesText = '', lastValuesCount = 0;
+function openValuesModal(s, label){
+  document.getElementById('valuesTitle').textContent = `${label} — all ${s.distinct} values`;
+  const rows = s.all
+    .map(v=>`<div class="wm-row"><span>${escapeHtml(v.value)}</span><span class="wm-count">${v.count}</span></div>`);
+  // "all N values" counts distinct present values, so rows with no value at
+  // all were silently absent -- and for a sparse metadata field that is the
+  // biggest group in the column. Marked as a non-value so it can't be read
+  // as a category named "missing", and left out of the copied text, which is
+  // value/count pairs meant for a spreadsheet.
+  if(s.missing){
+    rows.push(`<div class="wm-row wm-row-missing"><span>(no value)</span><span class="wm-count">${s.missing}</span></div>`);
+  }
+  document.getElementById('valuesBody').innerHTML = rows.join('');
+  lastValuesCount = s.all.length;
+  lastValuesText = s.all.map(v=>`${v.value}\t${v.count}`).join('\\n');
+  document.getElementById('valuesOverlay').classList.add('open');
+}
+document.getElementById('valuesCopy').onclick = ()=>{
+  writeClipboard(lastValuesText, lastValuesCount + ' values');
+};
+document.getElementById('valuesClose').onclick = ()=>document.getElementById('valuesOverlay').classList.remove('open');
+document.getElementById('valuesOverlay').addEventListener('click', (e)=>{
+  if(e.target.id === 'valuesOverlay') e.currentTarget.classList.remove('open');
+});
+
+function fmtNum(v){ return Number.isInteger(v) ? String(v) : v.toFixed(2); }
+
+// The column axis is field-driven only in 'row' mode (observation metadata
+// fields replace samples); everywhere else it's the sample axis, unchanged
+// from data mode. Matches colLabel's own mode branch.
+function colStatsFetch(j){
+  return mode==='row'
+    ? window.pywebview.api.field_summary('observation', rowFields[j], visObs)
+    : window.pywebview.api.col_summary(sampleAt(j));
+}
+
+// Sort/filter/rename/pin used to live as four always-visible icon buttons
+// crammed into every header cell -- decluttered per user request into a
+// single right-click menu instead (see the 'contextmenu' listener below).
+// Reads the ctxAxis/ctxField/ctxPinRaw/ctxPinField data attributes that
+// render() stamps onto header cells rather than baking markup per-cell.
+// `html` fields below are pre-escaped (the dynamic part is run through
+// escapeHtml, then wrapped in markup) -- the menu renders them directly
+// rather than escaping again, so a field name can never break out into
+// real markup but the <code> styling still comes through.
+function headerContextItems(el){
+  const items = [];
+  const axis = el.dataset.ctxAxis, field = el.dataset.ctxField;
+  if(axis && field){
+    const st = axisState[axis];
+    const name = `<code>${escapeHtml(fieldDisplay(axis, field))}</code>`;
+    const sortOn = st.sortField===field && st.sortDir!==0;
+    const sortHtml = !sortOn ? `⇅ Sort by ${name} (ascending)`
+      : st.sortDir===1 ? `⇅ Sort by ${name} (descending)` : `⇅ Clear sort on ${name}`;
+    items.push({html: sortHtml, onClick: ()=>cycleSort(axis, field)});
+    const filterOn = st.filters.some(f=>f.field===field);
+    items.push({html: filterOn ? `🔽 Edit filter on ${name}…` : `🔽 Filter by ${name}…`,
+      onClick: ()=>openFilterInput(axis, field, el)});
+    // Grouped, macOS-menu style: what you're looking at (sort/filter) is a
+    // different kind of act from changing the field itself (rename/delete).
+    // The separator also keeps Delete from sitting directly under Rename,
+    // where a slip of one row swaps "edit the name" for "remove the field".
+    items.push({sep: true});
+    items.push({html: `✏️ Rename ${name}…`, onClick: ()=>openFieldPopover(axis, field, el)});
+    // Deleting a field is already low-friction elsewhere in the app (a
+    // plain undoable mutation, same as sort/filter/pin -- see the "restore
+    // field" chip and ⌘Z), so this skips the popover and just does it,
+    // instead of routing through the same dialog as the very different
+    // rename flow (which needs text input).
+    items.push({html: `🗑 Delete ${name}`, onClick: ()=>deleteField(axis, field)});
+  }
+  if(el.dataset.ctxPinRaw !== undefined){
+    const rawIdx = parseInt(el.dataset.ctxPinRaw, 10);
+    if(items.length) items.push({sep: true});
+    items.push({html: pinnedObs.has(rawIdx) ? '📌 Unpin' : '📌 Pin to top', onClick: ()=>togglePin(rawIdx)});
+  }
+  if(el.dataset.ctxPinField !== undefined){
+    const f = el.dataset.ctxPinField;
+    if(items.length) items.push({sep: true});
+    items.push({html: pinnedColFields.has(f) ? '📌 Unpin' : '📌 Pin to top', onClick: ()=>togglePinField(f)});
+  }
+  return items;
+}
+
+function cycleSort(axis, field){
+  recordHistory('sort ' + axisLabel(axis) + ' by ' + fieldDisplay(axis, field));
+  const st = axisState[axis];
+  if(st.sortField!==field){ st.sortField=field; st.sortDir=1; }
+  else if(st.sortDir===1){ st.sortDir=-1; }
+  else if(st.sortDir===-1){ st.sortField=null; st.sortDir=0; }
+  else { st.sortDir=1; }
+  recomputeVisible(axis);
+  if(axis==='observation'){ rowPage=0; } else { colPage=0; }
+  render();
+  renderAxisChips();
+}
+
+// One-line human label for a single filter, shown on its own chip.
+function filterChipLabel(axis, f){
+  const display = fieldDisplay(axis, f.field);
+  let desc;
+  if(f.kind==='numeric'){
+    if(f.min!==null && f.max!==null) desc = `${display}: ${f.min}–${f.max}`;
+    else if(f.min!==null) desc = `${display}: ≥ ${f.min}`;
+    else if(f.max!==null) desc = `${display}: ≤ ${f.max}`;
+    else desc = display;
+  } else if(f.excluded.length===1){
+    const v = f.excluded[0]===MISSING_KEY ? '(missing)' : f.excluded[0];
+    desc = `${display}: not ${v}`;
+  } else {
+    desc = `${display}: ${f.excluded.length} excluded`;
+  }
+  // (N/M) is this filter's own match count in isolation, not the running
+  // total after stacking with other active filters on the same axis --
+  // see filterMatchCount's comment for why.
+  const {count, total} = filterMatchCount(axis, f);
+  return `${desc} (${count}/${total})`;
+}
+
+function removeSort(axis){
+  recordHistory('remove ' + axisLabel(axis) + ' sort');
+  axisState[axis].sortField = null;
+  axisState[axis].sortDir = 0;
+  recomputeVisible(axis);
+  if(axis==='observation'){ rowPage=0; } else { colPage=0; }
+  render();
+  renderAxisChips();
+}
+
+function removeFilter(axis, field){
+  recordHistory('remove ' + axisLabel(axis) + ' filter on ' + fieldDisplay(axis, field));
+  axisState[axis].filters = axisState[axis].filters.filter(f=>f.field!==field);
+  recomputeVisible(axis);
+  if(axis==='observation'){ rowPage=0; } else { colPage=0; }
+  render();
+  renderAxisChips();
+}
+
+function renameField(axis, field, newName){
+  recordHistory('rename ' + fieldDisplay(axis, field) + ' to ' + newName);
+  axisState[axis].renames[field] = newName;
+  render();
+  renderAxisChips();
+}
+
+function unrenameField(axis, field){
+  recordHistory('undo rename of ' + field);
+  delete axisState[axis].renames[field];
+  render();
+  renderAxisChips();
+}
+
+function deleteField(axis, field){
+  recordHistory('delete ' + axisWord(axis) + ' field ' + fieldDisplay(axis, field));
+  const fieldsArr = axis==='observation' ? rowFields : colFields;
+  const idx = fieldsArr.indexOf(field);
+  if(idx>=0) fieldsArr.splice(idx, 1);
+  axisState[axis].deletedFields.push(field);
+  delete axisState[axis].renames[field];
+  axisState[axis].filters = axisState[axis].filters.filter(f=>f.field!==field);
+  axisState[axis].replacements = axisState[axis].replacements.filter(r=>r.field!==field);
+  if(axisState[axis].sortField===field){ axisState[axis].sortField=null; axisState[axis].sortDir=0; }
+  // A pinned field just got deleted out from under colFields -- drop it
+  // from pinnedColFields too, else it lingers pointing at a field that no
+  // longer exists (harmless in practice, but a stale ghost in the chip).
+  if(axis==='sample' && pinnedColFields.has(field)){
+    pinnedColFields.delete(field);
+    if(selPinnedField===field) selPinnedField = null;
+  }
+  recomputeVisible(axis);
+  rowPage=0; colPage=0;
+  render();
+  renderAxisChips();
+}
+
+function undeleteField(axis, field){
+  recordHistory('restore ' + axisWord(axis) + ' field ' + field);
+  axisState[axis].deletedFields = axisState[axis].deletedFields.filter(f=>f!==field);
+  const fieldsArr = axis==='observation' ? rowFields : colFields;
+  if(!fieldsArr.includes(field)) fieldsArr.push(field);
+  rowPage=0; colPage=0;
+  render();
+  renderAxisChips();
+}
+
+// One chip per active sort and per active filter (not one combined chip per
+// axis) so each can be read and removed independently -- a single "3
+// filters" chip told you nothing about what was actually filtered.
+// The app used to speak two vocabularies for the same two axes: chips said
+// 'observation'/'sample' (the internal axis keys) while the mode buttons and
+// the pagers said row/col. One wins, and it's the BIOM one -- a row IS an
+// observation and a column IS a sample, but only the latter pair says which
+// is which when the table is transposed into a metadata view. Grid geometry
+// (.hl-row, wm-row, rowPage) keeps its row/col names; that's layout, not data.
+function axisWord(axis, plural){
+  const one = axis==='observation' ? 'observation' : 'sample';
+  return plural ? one + 's' : one;
+}
+function axisLabel(axis){ return axisWord(axis, true); }
+
+function renderAxisChips(){
+  const chips = [];
+  if(pinnedObs.size>0){
+    chips.push(`<span class="chip">📌 ${pinnedObs.size} pinned` +
+      `<button class="chip-x" data-kind="unpinAll" title="Unpin all">✕</button></span>`);
+  }
+  if(pinnedColFields.size>0){
+    chips.push(`<span class="chip">📌 ${pinnedColFields.size} pinned field${pinnedColFields.size===1?'':'s'}` +
+      `<button class="chip-x" data-kind="unpinAllFields" title="Unpin all">✕</button></span>`);
+  }
+  ['observation','sample'].forEach(axis=>{
+    const st = axisState[axis];
+    if(st.sortDir!==0){
+      chips.push(`<span class="chip">⇅ ${axisLabel(axis)}: <code>${escapeHtml(fieldDisplay(axis, st.sortField))}</code> ${st.sortDir===1?'▲':'▼'}` +
+        `<button class="chip-x" data-kind="sort" data-axis="${axis}" title="Clear sort">✕</button></span>`);
+    }
+    st.filters.forEach(f=>{
+      chips.push(`<span class="chip">🔽 ${axisLabel(axis)}: ${escapeHtml(filterChipLabel(axis, f))}` +
+        `<button class="chip-x" data-kind="filter" data-axis="${axis}" data-field="${escapeHtml(f.field)}" title="Remove filter">✕</button></span>`);
+    });
+    st.replacements.forEach(r=>{
+      chips.push(`<span class="chip">🔁 ${axisLabel(axis)}: <code>${escapeHtml(fieldDisplay(axis, r.field))}</code> "${escapeHtml(r.find)}"→"${escapeHtml(r.replace)}"` +
+        `<button class="chip-x" data-kind="replace" data-axis="${axis}" data-field="${escapeHtml(r.field)}" title="Undo replacement">✕</button></span>`);
+    });
+    Object.entries(st.renames).forEach(([orig, newName])=>{
+      chips.push(`<span class="chip">✏️ ${axisLabel(axis)}: <code>${escapeHtml(orig)}</code> → <code>${escapeHtml(newName)}</code>` +
+        `<button class="chip-x" data-kind="unrename" data-axis="${axis}" data-field="${escapeHtml(orig)}" title="Undo rename">✕</button></span>`);
+    });
+    st.deletedFields.forEach(f=>{
+      chips.push(`<span class="chip">🗑 ${axisLabel(axis)}: <code>${escapeHtml(f)}</code> deleted` +
+        `<button class="chip-x" data-kind="undelete" data-axis="${axis}" data-field="${escapeHtml(f)}" title="Restore field">✕</button></span>`);
+    });
+  });
+  if(chips.length>1){
+    chips.push(`<button class="chip chip-clear-all" title="Clear everything above">Clear all ✕</button>`);
+  }
+  const list = document.getElementById('axisChipsList');
+  list.innerHTML = chips.join('');
+  const clearAllBtn = list.querySelector('.chip-clear-all');
+  if(clearAllBtn) clearAllBtn.onclick = clearAllChips;
+  list.querySelectorAll('.chip-x').forEach(btn=>{
+    const kind = btn.dataset.kind;
+    if(kind==='sort') btn.onclick = ()=>removeSort(btn.dataset.axis);
+    else if(kind==='replace') btn.onclick = ()=>removeReplacement(btn.dataset.axis, btn.dataset.field);
+    else if(kind==='unrename') btn.onclick = ()=>unrenameField(btn.dataset.axis, btn.dataset.field);
+    else if(kind==='undelete') btn.onclick = ()=>undeleteField(btn.dataset.axis, btn.dataset.field);
+    else if(kind==='unpinAll') btn.onclick = ()=>{
+      pinnedObs.clear();
+      selPinnedRaw = null;
+      recomputeVisible('observation');
+      scheduleAutosave();
+      render();
+      renderAxisChips();
+    };
+    else if(kind==='unpinAllFields') btn.onclick = ()=>{
+      pinnedColFields.clear();
+      selPinnedField = null;
+      scheduleAutosave();
+      render();
+      renderAxisChips();
+    };
+    else btn.onclick = ()=>removeFilter(btn.dataset.axis, btn.dataset.field);
+  });
+  updateViewsBtnLabel();
+}
+
+// renderAxisChips() already runs after every state-changing action in the
+// app (sort/filter/pin/rename/undo/view-switch/etc), so piggybacking here
+// is the one hook point that reliably keeps the label current without
+// scattering calls across every mutator.
+function updateViewsBtnLabel(){
+  const btn = document.getElementById('viewsBtn');
+  if(!lastAppliedViewName){
+    btn.textContent = 'Views ▾';
+    btn.title = 'Saved views';
+    btn.classList.remove('views-dirty');
+    return;
+  }
+  const view = savedViews.find(v => v.name===lastAppliedViewName);
+  const dirty = !view || !viewStatesEqual(captureViewState(), viewStatePayload(view));
+  btn.innerHTML = `<span class="views-current-name">${escapeHtml(lastAppliedViewName)}</span>` +
+    (dirty ? `<span class="views-dirty-dot" title="Unsaved changes -- open Views to update">●</span>` : '') + ` ▾`;
+  btn.title = dirty ? `${lastAppliedViewName} (unsaved changes -- open Views to update)` : lastAppliedViewName;
+  btn.classList.toggle('views-dirty', dirty);
+}
+
+// One undo step for the whole chips row -- individual chip removers each
+// call recordHistory() per action, but a bulk clear should collapse to a
+// single ctrl-Z, not one undo per chip.
+// "Nothing applied" -- the state clearAllChips() resets to. Used to tell
+// whether the Views list's "All data" row is the one currently in effect.
+function isBaseState(){
+  const empty = st => !st.sortField && !st.filters.length && !st.replacements.length
+    && !Object.keys(st.renames).length && !st.deletedFields.length;
+  return empty(axisState.observation) && empty(axisState.sample)
+    && !pinnedObs.size && !pinnedColFields.size;
+}
+
+function clearAllChips(){
+  recordHistory('clear all filters and sorts');
+  axisState.observation = { sortField: null, sortDir: 0, filters: [], replacements: [], renames: {}, deletedFields: [] };
+  axisState.sample = { sortField: null, sortDir: 0, filters: [], replacements: [], renames: {}, deletedFields: [] };
+  pinnedObs.clear();
+  pinnedColFields.clear();
+  selPinnedRaw = null;
+  selPinnedField = null;
+  recomputeVisible('observation');
+  recomputeVisible('sample');
+  rowPage = 0; colPage = 0;
+  scheduleAutosave();
+  render();
+  renderAxisChips();
+}
+
+// Generates illustrative pandas/biom-format code reproducing the current
+// per-axis sort/filter as a standalone script -- not a byte-exact replay of
+// filterMatches (e.g. missing-token strings like "n/a" become NaN via
+// pd.to_numeric(errors='coerce')/isna() rather than a hardcoded token set),
+// good enough for a user to paste and adapt.
+function pyRepr(v){
+  if(v===null || v===undefined) return 'None';
+  if(typeof v==='number') return String(v);
+  return JSON.stringify(String(v));
+}
+function pyList(arr){ return '[' + arr.map(pyRepr).join(', ') + ']'; }
+
+function buildAxisExportCode(axis){
+  const st = axisState[axis];
+  const renameEntries = Object.entries(st.renames);
+  const hasSortOrFilter = st.filters.length || st.sortDir!==0;
+  const hasFieldOps = st.replacements.length || renameEntries.length || st.deletedFields.length;
+  if(!hasSortOrFilter && !hasFieldOps) return null;
+  const metaVar = axis==='observation' ? 'obs_meta' : 'samp_meta';
+  const lines = [];
+  lines.push(`# --- ${axis} axis${st.replacements.length ? ': '+st.replacements.length+' replacement(s)' : ''}${renameEntries.length ? ', '+renameEntries.length+' rename(s)' : ''}${st.deletedFields.length ? ', '+st.deletedFields.length+' deleted field(s)' : ''}${st.filters.length ? ', '+st.filters.length+' filter(s)' : ''}${st.sortDir ? ', sorted by '+st.sortField : ''} ---`);
+  lines.push(`${metaVar} = table.metadata_to_dataframe('${axis}')`);
+  st.replacements.forEach(r=>{
+    const col = `${metaVar}[${pyRepr(r.field)}]`;
+    lines.push(`${col} = ${col}.astype(str).str.replace(${pyRepr(r.find)}, ${pyRepr(r.replace)}, regex=False)`);
+  });
+  if(renameEntries.length){
+    const mapping = renameEntries.map(([o,n])=>`${pyRepr(o)}: ${pyRepr(n)}`).join(', ');
+    lines.push(`${metaVar} = ${metaVar}.rename(columns={${mapping}})`);
+  }
+  if(st.deletedFields.length){
+    lines.push(`${metaVar} = ${metaVar}.drop(columns=${pyList(st.deletedFields)})`);
+  }
+  if(!hasSortOrFilter){
+    lines.push(`table.add_metadata(${metaVar}.to_dict(orient='index'), axis='${axis}')`);
+    const droppedKeys = st.deletedFields.concat(renameEntries.map(([o])=>o));
+    if(droppedKeys.length) lines.push(`table.del_metadata(keys=${pyList(droppedKeys)}, axis='${axis}')`);
+    return lines;
+  }
+  lines.push(`mask = pd.Series(True, index=${metaVar}.index)`);
+  st.filters.forEach((f, i)=>{
+    const col = `${metaVar}[${pyRepr(f.field)}]`;
+    if(f.kind==='numeric'){
+      const vals = `vals${i}`;
+      lines.push(`${vals} = pd.to_numeric(${col}, errors='coerce')`);
+      if(f.min!==null && f.max!==null) lines.push(`mask &= ${vals}.between(${f.min}, ${f.max})`);
+      else if(f.min!==null) lines.push(`mask &= ${vals} >= ${f.min}`);
+      else if(f.max!==null) lines.push(`mask &= ${vals} <= ${f.max}`);
+    } else {
+      const excluded = f.excluded.filter(k=>k!==MISSING_KEY);
+      const dropMissing = f.excluded.includes(MISSING_KEY);
+      lines.push(`excluded${i} = ${pyList(excluded)}`);
+      lines.push(dropMissing
+        ? `mask &= ~(${col}.isin(excluded${i}) | ${col}.isna())`
+        : `mask &= ~${col}.isin(excluded${i})`);
+    }
+  });
+  lines.push(`ids = ${metaVar}.index[mask]`);
+  if(st.sortDir!==0){
+    const numeric = fieldIsNumeric(axis, st.sortField);
+    const col = `${metaVar}.loc[ids, ${pyRepr(st.sortField)}]`;
+    lines.push(numeric
+      ? `sort_key = pd.to_numeric(${col}, errors='coerce')`
+      : `sort_key = ${col}.astype(str)`);
+    lines.push(`ids = sort_key.sort_values(ascending=${st.sortDir===1}).index`);
+  }
+  lines.push(`table = table.filter(list(ids), axis='${axis}')`);
+  if(st.sortDir!==0) lines.push(`table = table.sort_order(list(ids), axis='${axis}')`);
+  return lines;
+}
+
+function buildExportCode(){
+  const axesActive = ['observation','sample'].filter(a=>{
+    const st = axisState[a];
+    return st.filters.length || st.sortDir!==0 || st.replacements.length ||
+      Object.keys(st.renames).length || st.deletedFields.length;
+  });
+  const lines = ['import biom'];
+  if(axesActive.length) lines.push('import pandas as pd');
+  lines.push('', `table = biom.load_table(${pyRepr(meta.filename)})`, '');
+  if(!axesActive.length){
+    lines.push('# No sort, filter, or find/replace currently active in the viewer.');
+  } else {
+    axesActive.forEach((axis, i)=>{
+      lines.push(...buildAxisExportCode(axis));
+      if(i < axesActive.length-1) lines.push('');
+    });
+  }
+  return lines.join('\\n');
+}
+
+function openExportModal(){
+  document.getElementById('codeBlock').textContent = buildExportCode();
+  document.getElementById('codeOverlay').classList.add('open');
+}
+document.getElementById('codeCopy').onclick = ()=>{
+  writeClipboard(document.getElementById('codeBlock').textContent, 'code');
+};
+document.getElementById('codeClose').onclick = ()=>document.getElementById('codeOverlay').classList.remove('open');
+document.getElementById('codeOverlay').addEventListener('click', (e)=>{
+  if(e.target.id === 'codeOverlay') e.currentTarget.classList.remove('open');
+});
+
+// Mirrors buildAxisExportCode's logic but as data for the backend (build_export_table
+// in app.py) to actually apply and write out, rather than as a script for the user
+// to run themselves.
+function buildExportSpec(){
+  const spec = {};
+  ['observation','sample'].forEach(axis=>{
+    const st = axisState[axis];
+    const vis = axis==='observation' ? visObs : visSample;
+    const rawIds = axis==='observation' ? meta.row_ids : meta.col_ids;
+    spec[axis] = {
+      ids: vis ? vis.map(i=>rawIds[i]) : null,
+      replacements: st.replacements,
+      renames: st.renames,
+      deletedFields: st.deletedFields,
+    };
+  });
+  return spec;
+}
+
+async function exportBiomFile(){
+  try{
+    const res = await window.pywebview.api.export_table(buildExportSpec());
+    if(res && res.ok) showSelected(`Exported to ${res.path}`);
+    else if(res && res.error) showSelected(`Export failed: ${res.error}`);
+  } catch(err){
+    showSelected(`Export failed: ${err}`);
+  }
+}
+
+function closeFilterPopover(){
+  const existing = document.getElementById('filterPopover');
+  if(existing) existing.remove();
+  return !!existing;
+}
+
+function openFilterInput(axis, field, anchorEl){
+  closeFilterPopover();
+  const st = axisState[axis];
+  const existing = st.filters.find(f=>f.field===field);
+  const numeric = fieldIsNumeric(axis, field);
+  const pop = document.createElement('div');
+  pop.id = 'filterPopover';
+  const rect = anchorEl.getBoundingClientRect();
+  pop.style.left = rect.left + 'px';
+  pop.style.top = (rect.bottom + 4) + 'px';
+
+  if(numeric){
+    // "min" / "max" as placeholders told you the shape of the input and
+    // nothing about the data -- you had to go read the field summary to
+    // find out whether 50 was a low cutoff or above every value in the
+    // column. The metadata is already in the page, so the real bounds cost
+    // one pass and turn the two boxes into a description of the field.
+    const bounds = numericBounds(axis, field);
+    pop.innerHTML = `<input class="fp-min" type="number" placeholder="${bounds ? fmtBound(bounds.lo) : 'min'}" value="${existing?existing.min ?? '':''}">` +
+      `<input class="fp-max" type="number" placeholder="${bounds ? fmtBound(bounds.hi) : 'max'}" value="${existing?existing.max ?? '':''}">` +
+      `<button class="fp-apply">Apply</button>` +
+      (existing ? `<button class="fp-clear">Clear</button>` : '');
+    document.body.appendChild(pop);
+    pop.querySelector('.fp-min').focus();
+  } else {
+    pop.classList.add('fp-checklist');
+    const values = distinctValues(axis, field);
+    const excluded = new Set(existing ? existing.excluded : []);
+    const rows = values.map(v =>
+      `<label class="fp-row"><input type="checkbox" class="fp-check" value="${escapeHtml(v.key)}" ${excluded.has(v.key) ? '' : 'checked'}>` +
+      `<span class="fp-val">${escapeHtml(v.label)}</span><span class="fp-count">${v.count}</span></label>`
+    ).join('');
+    // The checklist can be tall enough to bury its anchor, and it can be
+    // reopened from a chip far from the header it came from -- so it has to
+    // name the field it is about rather than leaving you to infer it.
+    pop.innerHTML =
+      `<div class="fp-title">Filter <b>${escapeHtml(fieldDisplay(axis, field))}</b></div>` +
+      `<input class="fp-search" type="text" placeholder="Search values…">` +
+      `<div class="fp-actions"><button class="fp-all">All</button><button class="fp-none">None</button></div>` +
+      `<div class="fp-list">${rows}</div>` +
+      `<div class="fp-buttons"><button class="fp-apply">Apply</button>${existing ? '<button class="fp-clear">Clear</button>' : ''}</div>`;
+    document.body.appendChild(pop);
+
+    const search = pop.querySelector('.fp-search');
+    search.addEventListener('input', ()=>{
+      const q = search.value.toLowerCase();
+      pop.querySelectorAll('.fp-row').forEach(row=>{
+        row.style.display = row.querySelector('.fp-val').textContent.toLowerCase().includes(q) ? '' : 'none';
+      });
+    });
+    pop.querySelector('.fp-all').onclick = ()=>{
+      pop.querySelectorAll('.fp-row:not([style*="display: none"]) .fp-check').forEach(cb=>cb.checked=true);
+    };
+    pop.querySelector('.fp-none').onclick = ()=>{
+      pop.querySelectorAll('.fp-row:not([style*="display: none"]) .fp-check').forEach(cb=>cb.checked=false);
+    };
+    search.focus();
+  }
+
+  // Clamp to the viewport now that the popover has real content/size --
+  // rect.bottom+4 alone can push a tall checklist off the bottom of the
+  // window (no scrollbar to reveal it, position:fixed just clips silently).
+  // Flip above the header if there's more room there than below.
+  const margin = 6;
+  const popRect = pop.getBoundingClientRect();
+  if(rect.bottom + 4 + popRect.height > window.innerHeight - margin){
+    const spaceAbove = rect.top - margin;
+    const spaceBelow = window.innerHeight - margin - (rect.bottom + 4);
+    pop.style.top = spaceAbove > spaceBelow
+      ? Math.max(margin, rect.top - popRect.height - 4) + 'px'
+      : (window.innerHeight - margin - popRect.height) + 'px';
+  }
+  if(rect.left + popRect.width > window.innerWidth - margin){
+    pop.style.left = Math.max(margin, window.innerWidth - margin - popRect.width) + 'px';
+  }
+
+  const apply = ()=>{
+    recordHistory('filter ' + axisLabel(axis) + ' on ' + fieldDisplay(axis, field));
+    const filters = st.filters.filter(f=>f.field!==field);
+    if(numeric){
+      const minV = pop.querySelector('.fp-min').value;
+      const maxV = pop.querySelector('.fp-max').value;
+      filters.push({field, kind:'numeric', min: minV===''?null:Number(minV), max: maxV===''?null:Number(maxV)});
+    } else {
+      const newExcluded = [...pop.querySelectorAll('.fp-check')].filter(cb=>!cb.checked).map(cb=>cb.value);
+      if(newExcluded.length) filters.push({field, kind:'categorical', excluded:newExcluded});
+    }
+    st.filters = filters;
+    recomputeVisible(axis);
+    if(axis==='observation'){ rowPage=0; } else { colPage=0; }
+    closeFilterPopover();
+    render();
+    renderAxisChips();
+  };
+  pop.querySelector('.fp-apply').onclick = apply;
+  const clearBtn = pop.querySelector('.fp-clear');
+  if(clearBtn) clearBtn.onclick = ()=>{
+    recordHistory('clear ' + axisLabel(axis) + ' filter on ' + fieldDisplay(axis, field));
+    st.filters = st.filters.filter(f=>f.field!==field);
+    recomputeVisible(axis);
+    if(axis==='observation'){ rowPage=0; } else { colPage=0; }
+    closeFilterPopover();
+    render();
+    renderAxisChips();
+  };
+  if(numeric) pop.addEventListener('keydown', e=>{ if(e.key==='Enter') apply(); if(e.key==='Escape') closeFilterPopover(); });
+  else pop.addEventListener('keydown', e=>{ if(e.key==='Escape') closeFilterPopover(); });
+}
+
+// Rename/delete a field inline, anchored to its header -- reuses the same
+// #filterPopover singleton as openFilterInput (only one popover open at a
+// time) so it gets the same outside-click-close and Escape handling for free.
+function openFieldPopover(axis, field, anchorEl){
+  closeFilterPopover();
+  const pop = document.createElement('div');
+  pop.id = 'filterPopover';
+  const rect = anchorEl.getBoundingClientRect();
+  pop.style.left = rect.left + 'px';
+  pop.style.top = (rect.bottom + 4) + 'px';
+  const current = fieldDisplay(axis, field);
+  pop.innerHTML = `<input class="fp-text" type="text" value="${escapeHtml(current)}">` +
+    `<button class="fp-apply">Rename</button>` +
+    `<button class="fp-clear">Delete</button>`;
+  document.body.appendChild(pop);
+  const input = pop.querySelector('.fp-text');
+  input.focus();
+  input.select();
+  const rename = ()=>{
+    const val = input.value.trim();
+    if(val && val!==field) renameField(axis, field, val);
+    closeFilterPopover();
+  };
+  pop.querySelector('.fp-apply').onclick = rename;
+  pop.querySelector('.fp-clear').onclick = ()=>{ deleteField(axis, field); closeFilterPopover(); };
+  pop.addEventListener('keydown', e=>{ if(e.key==='Enter') rename(); if(e.key==='Escape') closeFilterPopover(); });
+}
+
+document.addEventListener('click', (e)=>{
+  const pop = document.getElementById('filterPopover');
+  if(pop && !pop.contains(e.target) && !e.target.closest('.ctx-item')) closeFilterPopover();
+  const viewsPop = document.getElementById('viewsPopover');
+  if(viewsPop && !viewsPop.contains(e.target) && !e.target.closest('#viewsBtn')) closeViewsPopover();
+});
+
+function closeViewsPopover(){
+  const existing = document.getElementById('viewsPopover');
+  if(existing) existing.remove();
+  return !!existing;
+}
+
+function viewRowHtml(view){
+  const activeClass = lastAppliedViewName===view.name ? ' active' : '';
+  return `<div class="views-row${activeClass}" data-name="${escapeHtml(view.name)}">` +
+    `<span class="views-name">${escapeHtml(view.name)}</span>` +
+    `<button class="views-x" title="Delete">✕</button></div>`;
+}
+
+function openViewsPopover(){
+  closeFilterPopover();
+  closeViewsPopover();
+  // A pending "discard your filters?" is about a view switch that started
+  // here -- reopening this list means you went back on it, so the question
+  // is moot and should not be left hanging over the page.
+  closeConfirmPopover();
+  const pop = document.createElement('div');
+  pop.id = 'viewsPopover';
+  const rect = viewsBtn.getBoundingClientRect();
+  pop.style.left = rect.left + 'px';
+  pop.style.top = (rect.bottom + 4) + 'px';
+  // "No view" has to be selectable, not just an implicit state you fall
+  // into: without it the list is a one-way door -- you can enter a view but
+  // there's no listed way back to the unfiltered table, and the only escape
+  // (the "Clear all" chip) lives somewhere else entirely and doesn't read as
+  // being about views at all. As a row at the top of the same list, the
+  // whole thing becomes an honest single-select of "which state am I in",
+  // base state included.
+  const baseActive = (!lastAppliedViewName && isBaseState()) ? ' active' : '';
+  const baseRow = `<div class="views-row views-row-base${baseActive}">` +
+    `<span class="views-name">All data</span>` +
+    `<span class="views-base-hint">no filters</span></div>`;
+  const rows = baseRow + (savedViews.length
+    ? savedViews.map(viewRowHtml).join('')
+    : `<div class="views-empty">No saved views yet</div>`);
+  const activeView = lastAppliedViewName ? savedViews.find(v => v.name===lastAppliedViewName) : null;
+  const dirty = !!activeView && !viewStatesEqual(captureViewState(), viewStatePayload(activeView));
+  const updateBanner = dirty
+    ? `<div class="views-dirty-banner">` +
+        `<div class="views-dirty-msg">● "${escapeHtml(lastAppliedViewName)}" has unsaved changes</div>` +
+        `<div class="views-dirty-actions">` +
+          `<button class="views-update-btn">Update</button>` +
+          `<button class="views-revert-btn">Revert</button>` +
+        `</div>` +
+      `</div>`
+    : '';
+  pop.innerHTML = updateBanner + `<div class="views-list">${rows}</div>` +
+    `<div class="views-save"><input class="views-save-input" type="text" placeholder="Save current as…">` +
+    `<button class="views-save-btn">Save</button></div>`;
+  document.body.appendChild(pop);
+  wireViewsPopover(pop);
+  if(dirty){
+    pop.querySelector('.views-update-btn').onclick = ()=> saveCurrentAsView(lastAppliedViewName);
+    pop.querySelector('.views-revert-btn').onclick = ()=> applyView(activeView, lastAppliedViewName);
+  }
+}
+
+function wireViewsPopover(pop){
+  pop.querySelector('.views-row-base').addEventListener('click', ()=>{
+    closeViewsPopover();
+    lastAppliedViewName = null;
+    clearAllChips();
+  });
+  pop.querySelectorAll('.views-row:not(.views-row-base)').forEach(row=>{
+    const name = row.dataset.name;
+    row.querySelector('.views-name').addEventListener('click', ()=> switchToView(name));
+    row.querySelector('.views-name').addEventListener('dblclick', (e)=>{ e.stopPropagation(); startRenameView(row, name); });
+    row.querySelector('.views-x').addEventListener('click', (e)=>{ e.stopPropagation(); deleteView(name); });
+  });
+  const saveInput = pop.querySelector('.views-save-input');
+  const saveBtn = pop.querySelector('.views-save-btn');
+  const doSave = ()=> saveCurrentAsView(saveInput.value.trim());
+  saveBtn.onclick = doSave;
+  saveInput.addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.stopPropagation(); doSave(); } if(e.key==='Escape'){ e.stopPropagation(); closeViewsPopover(); } });
+}
+
+async function refreshSavedViews(){
+  const workspace = await window.pywebview.api.load_workspace();
+  savedViews = workspace.views;
+}
+
+async function saveCurrentAsView(name){
+  if(!name) return;
+  await window.pywebview.api.save_view(name, captureViewState());
+  await refreshSavedViews();
+  lastAppliedViewName = name;
+  closeViewsPopover();
+}
+
+async function deleteView(name){
+  await window.pywebview.api.delete_view(name);
+  if(lastAppliedViewName===name) lastAppliedViewName = null;
+  await refreshSavedViews();
+  openViewsPopover();
+}
+
+function startRenameView(row, oldName){
+  row.innerHTML = `<input class="views-rename-input" type="text" value="${escapeHtml(oldName)}">`;
+  const input = row.querySelector('.views-rename-input');
+  input.focus();
+  input.select();
+  // Removing the input (via openViewsPopover -> closeViewsPopover) while it's
+  // still focused fires a native blur, which would otherwise re-run commit()
+  // a second time. Guard so each rename attempt only commits once, and let
+  // Escape set the guard itself so the ensuing blur is a no-op that never
+  // reads input.value or calls the API.
+  let committed = false;
+  const commit = async ()=>{
+    if(committed) return;
+    committed = true;
+    const newName = input.value.trim();
+    if(!newName || newName===oldName){ openViewsPopover(); return; }
+    const result = await window.pywebview.api.rename_view(oldName, newName);
+    if(!result.ok){ input.classList.add('error'); input.title = 'Name already taken'; committed = false; return; }
+    if(lastAppliedViewName===oldName) lastAppliedViewName = newName;
+    await refreshSavedViews();
+    openViewsPopover();
+  };
+  input.addEventListener('keydown', e=>{
+    if(e.key==='Enter'){ e.stopPropagation(); commit(); }
+    if(e.key==='Escape'){ e.stopPropagation(); committed = true; openViewsPopover(); }
+  });
+  input.addEventListener('blur', commit);
+}
+
+function applyView(view, name){
+  // recordHistory() only captures the undo snapshot's existing shape
+  // (axisState/rowFields/colFields) -- mode and pins are already deliberately
+  // outside undo history everywhere else in this app (see pinnedObs's own
+  // comment), so ⌘Z after a switch reverts filters/sort but leaves the
+  // switched-to view's mode/pins in place. Same partial coverage undo
+  // already has for a plain pin toggle, not a new gap.
+  recordHistory(name ? 'switch to view ' + name : 'switch view');
+  applyViewState(view);
+  lastAppliedViewName = name;
+  lastLoadedViewState = captureViewState();
+  closeViewsPopover();
+  render();
+  renderAxisChips();
+}
+
+function closeConfirmPopover(){
+  const existing = document.getElementById('confirmPopover');
+  if(existing) existing.remove();
+  const backdrop = document.getElementById('confirmBackdrop');
+  if(backdrop) backdrop.remove();
+  return !!existing;
+}
+
+// `dest` names where the discard is taking you, if anywhere. "Discard
+// current filters?" on its own asks you to weigh a loss against a benefit
+// it declines to mention.
+function confirmDiscardCurrent(onConfirm, dest){
+  closeFilterPopover();
+  closeViewsPopover();
+  closeConfirmPopover();
+  const pop = document.createElement('div');
+  pop.id = 'confirmPopover';
+  pop.innerHTML = `<div class="confirm-msg">Discard current filters` +
+    (dest ? ` and switch to “${escapeHtml(dest)}”` : '') + `?</div>` +
+    `<div class="confirm-buttons"><button class="confirm-discard">Discard</button><button class="confirm-cancel">Cancel</button></div>`;
+  const backdrop = document.createElement('div');
+  backdrop.id = 'confirmBackdrop';
+  // Clicking away is the same answer as Cancel -- the safe one. It must not
+  // be the same as dismissing the question and losing the filters anyway.
+  backdrop.onclick = closeConfirmPopover;
+  document.body.appendChild(backdrop);
+  document.body.appendChild(pop);
+  pop.querySelector('.confirm-discard').onclick = ()=>{ closeConfirmPopover(); onConfirm(); };
+  pop.querySelector('.confirm-cancel').onclick = closeConfirmPopover;
+}
+
+async function switchToView(name){
+  const view = savedViews.find(v => v.name===name);
+  if(!view) return;
+  const current = captureViewState();
+  const matchesSaved = savedViews.some(v => viewStatesEqual(current, viewStatePayload(v)));
+  const dirty = !viewStatesEqual(current, lastLoadedViewState) && !matchesSaved;
+  if(dirty){ confirmDiscardCurrent(()=> applyView(view, name), name); return; }
+  applyView(view, name);
+}
+
+const viewsBtn = document.getElementById('viewsBtn');
+viewsBtn.onclick = ()=> openViewsPopover();
+
+
+function togglePin(rawIdx){
+  if(pinnedObs.has(rawIdx)) pinnedObs.delete(rawIdx); else pinnedObs.add(rawIdx);
+  if(selPinnedRaw===rawIdx) selPinnedRaw = null;
+  recomputeVisible('observation');
+  // Clamp rather than reset to page 0 -- pin/unpin is a high-frequency
+  // action (unlike sort/filter), a full page reset would be jarring.
+  const maxPage = Math.max(0, Math.ceil(rowsTotal()/rowsPerPage()) - 1);
+  rowPage = Math.min(rowPage, maxPage);
+  scheduleAutosave();
+  render();
+  renderAxisChips();
+}
+
+function togglePinField(field){
+  if(pinnedColFields.has(field)) pinnedColFields.delete(field); else pinnedColFields.add(field);
+  if(selPinnedField===field) selPinnedField = null;
+  const maxPage = Math.max(0, Math.ceil(rowsTotal()/rowsPerPage()) - 1);
+  rowPage = Math.min(rowPage, maxPage);
+  scheduleAutosave();
+  render();
+  renderAxisChips();
+}
+
+function closeContextMenu(){
+  const existing = document.getElementById('ctxMenu');
+  if(existing) existing.remove();
+  return !!existing;
+}
+
+// The native right-click menu (WKWebView's default) doesn't offer a web
+// search on macOS the way Safari does -- just "Services" and the like (see
+// screenshot in the request this came from). A small in-page menu near the
+// cursor is simpler and more portable than fighting the native menu's
+// contents, and pywebview's cocoa backend only auto-opens external links
+// for real <a> navigations, not window.open() -- see Api.open_url's comment
+// for why the actual browser launch goes through Python instead.
+document.addEventListener('contextmenu', (e)=>{
+  // Right-click has to move the selection to what's under the cursor.
+  // Without this the menu acts on one row while the highlight and the
+  // readout bar still point at whatever was last left-clicked -- the UI
+  // actively pointing away from the thing about to be renamed or deleted.
+  // Replaying the element's own click handler is what gets every keying
+  // scheme (paged / pinned-raw / pinned-field) and every label format
+  // right, rather than a second copy of that logic here.
+  const gridTarget = e.target.closest('#grid .cell');
+  if(gridTarget) gridTarget.click();
+  const headerEl = e.target.closest('.rh, .hdr.colhdr');
+  const headerItems = headerEl ? headerContextItems(headerEl) : [];
+
+  const sel = window.getSelection().toString().trim();
+  const cellEl = e.target.closest('.cell, .wm-row, #cellBlock, #codeBlock, #selected');
+  const fallback = cellEl ? (cellEl.value !== undefined ? cellEl.value : cellEl.textContent).trim() : '';
+  const text = sel || fallback;
+  if(!headerItems.length && !text) return; // nothing relevant under the cursor -- let the native menu show
+  e.preventDefault();
+  closeContextMenu();
+  const menu = document.createElement('div');
+  menu.id = 'ctxMenu';
+  menu.style.left = e.clientX + 'px';
+  menu.style.top = e.clientY + 'px';
+  let html = headerItems.map((it, i)=> it.sep
+    ? `<div class="ctx-sep"></div>`
+    : `<button class="ctx-item" data-hi="${i}">${it.html}</button>`).join('');
+  if(text){
+    if(headerItems.length) html += `<div class="ctx-sep"></div>`;
+    // Head-only truncation reads fine for prose but silently drops the
+    // identifying part of anything hierarchical (taxonomy strings, paths)
+    // -- same class of problem as the row-header/search-result truncation
+    // above, just without a search query to center on here. Middle
+    // truncation keeps both ends, which is what you actually need to
+    // confirm this is the right thing before searching it.
+    const short = text.length > 40 ? text.slice(0, 20) + '…' + text.slice(-17) : text;
+    html += `<button class="ctx-item" data-search="1">🔍 Search Google for <code>${escapeHtml(short)}</code></button>`;
+  }
+  menu.innerHTML = html;
+  document.body.appendChild(menu);
+  headerItems.forEach((it, i)=>{
+    if(it.sep) return;
+    menu.querySelector(`[data-hi="${i}"]`).onclick = ()=>{ closeContextMenu(); it.onClick(); };
+  });
+  if(text){
+    menu.querySelector('[data-search]').onclick = ()=>{
+      window.pywebview.api.open_url('https://www.google.com/search?q=' + encodeURIComponent(text));
+      closeContextMenu();
+    };
+  }
+});
+document.addEventListener('click', closeContextMenu);
+
+function miniHist(histogram){
+  if(!histogram.length) return '';
+  const max = Math.max(...histogram.map(b=>b.count), 1);
+  const bars = histogram.map(b =>
+    `<span class="bar" style="height:${Math.max(4, b.count/max*100)}%" title="${fmtNum(b.lo)}–${fmtNum(b.hi)}: ${b.count}"></span>`
+  ).join('');
+  return `<div class="stat-bars">${bars}</div>`;
+}
+
+function topValueRows(top, presentTotal){
+  return top.slice(0, 3).map(t => {
+    const pct = presentTotal ? Math.round(t.count/presentTotal*100) : 0;
+    return `<div class="stat-top-row" title="${escapeHtml(t.value)}: ${t.count}">
+      <span class="fill" style="width:${pct}%"></span>
+      <span class="lbl">${escapeHtml(t.value)}</span>
+      <span class="pct">${pct}%</span>
+    </div>`;
+  }).join('');
+}
+
+// Compact Data-Wrangler-style stats block: presence line (missing or nonzero),
+// then either a mini histogram + min/max (numeric) or distinct count + top
+// values (categorical). Same shape for row_summary/col_summary/field_summary.
+function statCellHtml(s){
+  const presence = s.nonzero!==undefined
+    ? `Nonzero <b>${s.nonzero}</b> (${(100-s.sparsity).toFixed(0)}%)`
+    : `Missing <b>${s.missing}</b> (${s.n ? Math.round(s.missing/s.n*100) : 0}%)`;
+
+  if(s.kind==='numeric'){
+    const range = s.min===null ? '' : `<div class="stat-line">Min ${fmtNum(s.min)} · Max ${fmtNum(s.max)}</div>`;
+    return `<div class="stat-line">${presence}</div>${miniHist(s.histogram)}${range}`;
+  }
+
+  const distinctPct = s.n ? Math.round(s.distinct/s.n*100) : 0;
+  const presentTotal = s.n - s.missing;
+  // The strip only ever renders the top 3 rows (topValueRows), regardless of
+  // how many the backend sent in `top` -- so "how many more" has to be
+  // counted against those 3, not against `top.length` or the backend's own
+  // other_count (which is relative to its top-10 cutoff). Otherwise ranks
+  // 4-10 silently vanish: neither shown above nor counted in the "+N" line.
+  const shownCount = s.top.slice(0, 3).length;
+  const otherDistinct = s.distinct - shownCount;
+  const otherRows = presentTotal - s.top.slice(0, 3).reduce((a, t) => a + t.count, 0);
+  const other = otherDistinct > 0
+    ? `<div class="stat-line stat-other" title="View all ${s.distinct} values">+${otherDistinct} more (${otherRows} entries)</div>`
+    : '';
+  return `<div class="stat-line">${presence}</div>` +
+    `<div class="stat-line">Distinct <b>${s.distinct}</b> (${distinctPct}%)</div>` +
+    topValueRows(s.top, presentTotal) + other;
+}
+
+// Wires the "+N other" line's click after innerHTML is set (statCellHtml
+// only builds markup, no field/axis context to close over) -- shared by the
+// col-stats strip (via statCell) and the row-stats strip (baked into a
+// bigger innerHTML alongside the row label, so wired separately there).
+function wireStatOther(containerEl, s, label){
+  if(!s.all) return;
+  const el = containerEl.querySelector('.stat-other');
+  if(el) el.onclick = (e)=>{ e.stopPropagation(); openValuesModal(s, label); };
+}
+
+function statCell(s, label){
+  const cell = document.createElement('div');
+  cell.className = 'cell stat-cell';
+  cell.innerHTML = statCellHtml(s);
+  wireStatOther(cell, s, label);
+  return cell;
+}
+
+function fillerCell(){
+  const cell = document.createElement('div');
+  cell.className = 'cell hdr';
+  return cell;
+}
+
+function applyHighlight(){
+  document.querySelectorAll('#grid .hl-row,#grid .hl-col,#grid .hl-cell')
+    .forEach(el=>el.classList.remove('hl-row','hl-col','hl-cell'));
+  if(selR===null && selPinnedRaw===null && selPinnedField===null && selC===null) return;
+  // Excel-style: a single selected cell (a row identity + selC both set)
+  // only tints its row/column headers, not the whole row/column body — the
+  // cell itself gets the outline instead. selR/selPinnedRaw/selPinnedField
+  // are mutually-exclusive "which row" slots (paginated observations,
+  // frozen observations, frozen fields) since none of their identities
+  // share a common position space with the others.
+  const rowSelected = selR!==null || selPinnedRaw!==null || selPinnedField!==null;
+  const cellSelected = rowSelected && selC!==null;
+  // Paginated cells/headers -- explicitly excludes frozen body cells (which
+  // also carry data-c) since those are keyed by data-pinned-raw/-field, not
+  // data-r, and would otherwise get miscounted as "headers" here for
+  // lacking data-r.
+  document.querySelectorAll('#grid [data-r],#grid [data-c]:not([data-pinned-raw]):not([data-pinned-field])').forEach(el=>{
+    const r = el.dataset.r!==undefined ? parseInt(el.dataset.r) : null;
+    const c = el.dataset.c!==undefined ? parseInt(el.dataset.c) : null;
+    const isHeader = r===null || c===null;
+    if(selR!==null && r===selR && (isHeader || !cellSelected)) el.classList.add('hl-row');
+    if(selC!==null && c===selC && (isHeader || !cellSelected)) el.classList.add('hl-col');
+    if(cellSelected && selR!==null && r===selR && c===selC) el.classList.add('hl-cell');
+  });
+  // Frozen observation rows (data/row mode) -- same shape as above, keyed
+  // by pinned raw index instead of page position. Column highlight (hl-col)
+  // still applies here even when the selected row is a paginated one, so a
+  // column stays tinted across the whole grid including the frozen rows.
+  document.querySelectorAll('#grid [data-pinned-raw]').forEach(el=>{
+    const pr = parseInt(el.dataset.pinnedRaw);
+    const c = el.dataset.c!==undefined ? parseInt(el.dataset.c) : null;
+    const isHeader = c===null;
+    if(selPinnedRaw!==null && pr===selPinnedRaw && (isHeader || !cellSelected)) el.classList.add('hl-row');
+    if(selC!==null && c===selC && (isHeader || !cellSelected)) el.classList.add('hl-col');
+    if(cellSelected && selPinnedRaw!==null && pr===selPinnedRaw && c===selC) el.classList.add('hl-cell');
+  });
+  // Frozen fields (col mode) -- same shape again, keyed by field name.
+  document.querySelectorAll('#grid [data-pinned-field]').forEach(el=>{
+    const pf = el.dataset.pinnedField;
+    const c = el.dataset.c!==undefined ? parseInt(el.dataset.c) : null;
+    const isHeader = c===null;
+    if(selPinnedField!==null && pf===selPinnedField && (isHeader || !cellSelected)) el.classList.add('hl-row');
+    if(selC!==null && c===selC && (isHeader || !cellSelected)) el.classList.add('hl-col');
+    if(cellSelected && selPinnedField!==null && pf===selPinnedField && c===selC) el.classList.add('hl-cell');
+  });
+}
+
+function rpFieldsFor(axis){ return axis==='observation' ? rowFields : colFields; }
+
+function populateRpFields(){
+  const axis = document.getElementById('rpAxis').value;
+  const sel = document.getElementById('rpField');
+  sel.innerHTML = rpFieldsFor(axis).map(f=>`<option value="${escapeHtml(f)}">${escapeHtml(fieldDisplay(axis, f))}</option>`).join('');
+}
+
+function renderRpList(){
+  const items = [];
+  ['observation','sample'].forEach(axis=>{
+    axisState[axis].replacements.forEach(r=>{
+      items.push(`<div class="rp-item"><span>${escapeHtml(axis)}: ${escapeHtml(fieldDisplay(axis, r.field))} — "${escapeHtml(r.find)}" → "${escapeHtml(r.replace)}"</span>` +
+        `<button data-axis="${axis}" data-field="${escapeHtml(r.field)}">✕</button></div>`);
+    });
+  });
+  const el = document.getElementById('rpList');
+  el.innerHTML = items.join('');
+  el.querySelectorAll('button').forEach(btn=>{
+    btn.onclick = ()=> removeReplacement(btn.dataset.axis, btn.dataset.field);
+  });
+}
+
+function removeReplacement(axis, field){
+  recordHistory('remove replacement on ' + fieldDisplay(axis, field));
+  axisState[axis].replacements = axisState[axis].replacements.filter(r=>r.field!==field);
+  render();
+  renderAxisChips();
+  renderRpList();
+}
+
+function openReplaceModal(){
+  populateRpFields();
+  renderRpList();
+  document.getElementById('replaceOverlay').classList.add('open');
+  document.getElementById('rpFind').focus();
+}
+document.getElementById('rpAxis').addEventListener('change', populateRpFields);
+document.getElementById('rpApply').onclick = ()=>{
+  const axis = document.getElementById('rpAxis').value;
+  const field = document.getElementById('rpField').value;
+  const find = document.getElementById('rpFind').value;
+  const replace = document.getElementById('rpReplace').value;
+  if(!field || !find) return;
+  recordHistory('replace text in ' + fieldDisplay(axis, field));
+  axisState[axis].replacements = axisState[axis].replacements.filter(r=>r.field!==field);
+  axisState[axis].replacements.push({field, find, replace});
+  document.getElementById('rpFind').value = '';
+  document.getElementById('rpReplace').value = '';
+  render();
+  renderAxisChips();
+  renderRpList();
+};
+document.getElementById('replaceClose').onclick = ()=>document.getElementById('replaceOverlay').classList.remove('open');
+document.getElementById('replaceOverlay').addEventListener('click', (e)=>{
+  if(e.target.id === 'replaceOverlay') e.currentTarget.classList.remove('open');
+});
+
+// 'row' mode only swaps the column axis, 'col' mode only swaps the row axis —
+// so reset just the axis whose meaning changed and keep your place on the other.
+const rowAxisKey = m => m==='col' ? 'fields' : 'ids';
+const colAxisKey = m => m==='row' ? 'fields' : 'ids';
+modeBtns.forEach(b=>b.onclick = ()=>{
+  const m = b.dataset.m;
+  if(rowAxisKey(m)!==rowAxisKey(mode)){ rowPage = 0; selR = null; selPinnedRaw = null; selPinnedField = null; }
+  if(colAxisKey(m)!==colAxisKey(mode)){ colPage = 0; selC = null; }
+  setMode(m);
+  render();
+});
+
+const searchBox = document.getElementById('searchBox');
+let searchDebounce=null;
+// Selecting a result blurs the box and closes the panel (jumpTo) without
+// clearing the query -- re-focusing (a plain click, no typing) should bring
+// the same results back rather than leaving the panel dead until the next
+// keystroke.
+searchBox.addEventListener('focus', ()=>{ if(searchBox.value.trim()) runSearch(searchBox.value); });
+
+// Pinning keeps the results panel open across result clicks and clicks
+// elsewhere in the grid, so you can work through a list of matches (e.g.
+// jump to several samples in turn) without re-searching each time.
+let searchPinned = false;
+const searchPin = document.getElementById('searchPin');
+searchPin.onclick = ()=>{
+  searchPinned = !searchPinned;
+  searchPin.classList.toggle('on', searchPinned);
+  searchPin.querySelector('span').textContent = searchPinned ? 'Pinned' : 'Keep open';
+  if(searchPinned && searchBox.value.trim()) runSearch(searchBox.value);
+};
+searchBox.addEventListener('input', ()=>{
+  clearTimeout(searchDebounce);
+  searchDebounce = setTimeout(()=>runSearch(searchBox.value), 120);
+});
+searchBox.addEventListener('keydown', (e)=>{
+  const results = document.getElementById('searchResults');
+  if(!results.classList.contains('open')) return;
+  if(e.key==='Tab'){
+    e.preventDefault();
+    const order = searchTabOrder();
+    const at = order.indexOf(searchTab);
+    searchTab = order[(at + (e.shiftKey ? -1 : 1) + order.length) % order.length];
+    renderSearchPanel();
+  }
+  else if(e.key==='ArrowDown'){ e.preventDefault(); highlightResult(Math.min(searchHiIdx+1, searchFlat.length-1)); }
+  else if(e.key==='ArrowUp'){ e.preventDefault(); highlightResult(Math.max(searchHiIdx-1, 0)); }
+  else if(e.key==='Enter'){ e.preventDefault(); selectSearchResult(searchHiIdx>=0 ? searchHiIdx : 0); }
+  else if(e.key==='Escape'){
+    // Escape always dismisses, even pinned -- it's the explicit "get this
+    // out of my way" gesture, so it also drops the pin rather than leaving
+    // a pinned-but-hidden panel that won't reopen on the next focus.
+    searchPinned = false;
+    searchPin.classList.remove('on');
+    searchPin.querySelector('span').textContent = 'Keep open';
+    results.classList.remove('open', 'pinned');
+    searchBox.blur();
+  }
+});
+document.addEventListener('click', (e)=>{
+  if(searchPinned) return;
+  // composedPath(), not searchWrap.contains(e.target): a click on something
+  // like .sr-more ("show all") re-renders #searchResults.innerHTML first
+  // (its own listener runs before this one, earlier in the bubble path),
+  // detaching e.target from the tree -- contains() would then report it as
+  // "outside" and immediately re-close the panel that render just reopened.
+  // composedPath() is captured at dispatch time, so it's unaffected by that.
+  if(!e.composedPath().includes(document.getElementById('searchWrap'))){
+    document.getElementById('searchResults').classList.remove('open');
+  }
+});
+
+document.getElementById('rowUp').onclick = ()=>{ rowPage--; render(); };
+document.getElementById('rowDown').onclick = ()=>{ rowPage++; render(); };
+document.getElementById('colPrev').onclick = ()=>{ colPage--; render(); };
+document.getElementById('colNext').onclick = ()=>{ colPage++; render(); };
+
+let resizeT=null;
+window.addEventListener('resize', ()=>{
+  clearTimeout(resizeT);
+  resizeT = setTimeout(()=>{ rowPage=0; colPage=0; render(); }, 150);
+});
+
+const systemDark = window.matchMedia('(prefers-color-scheme: dark)');
+function toggleTheme(){
+  const dark = (document.documentElement.dataset.theme || (systemDark.matches ? 'dark' : 'light')) === 'dark';
+  document.documentElement.dataset.theme = dark ? 'light' : 'dark';
+}
+
+function setFontSize(px){
+  fontSize = Math.max(8, Math.min(28, px));
+  document.documentElement.style.setProperty('--fs', fontSize+'px');
+  rowPage=0; colPage=0; render();
+}
+
+// Arrow-key traversal of the grid. Every other way of moving through this
+// table -- paging, selecting, reading a value -- needed the mouse, which
+// for a spreadsheet-shaped app is the one keyboard gap that actually
+// matters. Selection drives the page rather than the other way round: step
+// off the bottom row and the page follows, so the whole axis is reachable
+// without ever touching the nav buttons.
+// Each step is a full render, and crossing a page boundary is a real fetch
+// over the pywebview bridge. Auto-repeat outruns that easily, so a step
+// that arrives mid-flight is dropped rather than queued -- the cursor lags
+// the key a little instead of running on for seconds after it's released.
+let moveInFlight = false;
+async function moveSelection(dr, dc){
+  if(moveInFlight) return;
+  moveInFlight = true;
+  try{ await moveSelectionStep(dr, dc); } finally { moveInFlight = false; }
+}
+async function moveSelectionStep(dr, dc){
+  if(selR===null || selC===null){
+    // No paged cell selected yet (nothing selected, or the selection is a
+    // frozen row, which lives in a different keying scheme) -- start at the
+    // top-left of whatever page is on screen instead of jumping elsewhere.
+    selR = rowPage*rowsPerPage();
+    selC = colPage*colsPerPage();
+  } else {
+    selR = Math.max(0, Math.min(rowsTotal()-1, selR + dr));
+    selC = Math.max(0, Math.min(colsTotal()-1, selC + dc));
+  }
+  selPinnedRaw = null; selPinnedField = null;
+  rowPage = Math.floor(selR/rowsPerPage());
+  colPage = Math.floor(selC/colsPerPage());
+  await render();
+  const cell = document.querySelector(`#grid .cell[data-r="${selR}"][data-c="${selC}"]`);
+  if(cell) cell.click();
+}
+const ARROW_DELTA = {ArrowUp:[-1,0], ArrowDown:[1,0], ArrowLeft:[0,-1], ArrowRight:[0,1]};
+
+document.addEventListener('keydown', (e)=>{
+  const mod = e.metaKey || e.ctrlKey;
+  // Arrows belong to whatever is focused (the search box runs its own
+  // result-list navigation) and to any open popover or modal, so the grid
+  // only claims them when nothing else is up.
+  if(!mod && !e.altKey && ARROW_DELTA[e.key] && meta
+     && !/^(INPUT|TEXTAREA|SELECT)$/.test((document.activeElement||{}).tagName||'')
+     && !document.getElementById('ctxMenu') && !document.getElementById('filterPopover')
+     && !document.getElementById('viewsPopover') && !document.getElementById('confirmPopover')
+     && !document.querySelector('.wm-overlay.open')){
+    e.preventDefault();
+    moveSelection(...ARROW_DELTA[e.key]);
+    return;
+  }
+  if(mod){
+    const k = e.key.toLowerCase();
+    // ⌘C copies the current selection -- but only when the user hasn't
+    // selected text of their own somewhere (a modal's code block, the
+    // readout bar) and isn't typing in a field. In those cases the native
+    // copy is what they meant, and hijacking it would be the same
+    // clipboard theft that auto-copy-on-click was.
+    if(k==='c'){
+      const ownSelection = (window.getSelection()||{toString:()=>''}).toString().length > 0;
+      const typing = /^(INPUT|TEXTAREA)$/.test((document.activeElement||{}).tagName||'');
+      if(!ownSelection && !typing && document.getElementById('selected').value){
+        e.preventDefault();
+        copySelected();
+        flashSelected('Copied');
+      }
+      return;
+    }
+    if(k==='f'){ e.preventDefault(); document.getElementById('searchBox').focus(); }
+    else if(k==='r'){ e.preventDefault(); openReplaceModal(); }
+    else if(k==='e'){ e.preventDefault(); openExportModal(); }
+    else if(k==='s'){ e.preventDefault(); exportBiomFile(); }
+    else if(k==='z' && e.shiftKey){ e.preventDefault(); redo(); }
+    else if(k==='z'){ e.preventDefault(); undo(); }
+    else if(k==='enter'){ e.preventDefault(); openCellModal(); }
+    else if(e.key==='=' || e.key==='+'){ e.preventDefault(); setFontSize(fontSize+1); }
+    else if(e.key==='-'){ e.preventDefault(); setFontSize(fontSize-1); }
+    return;
+  }
+  if(e.key==='Escape'){
+    let handled = false;
+    if(closeFilterPopover()) handled = true;
+    if(closeViewsPopover()) handled = true;
+    if(closeContextMenu()) handled = true;
+    ['codeOverlay','replaceOverlay','cellOverlay','valuesOverlay'].forEach(id=>{
+      const el = document.getElementById(id);
+      if(el.classList.contains('open')){ el.classList.remove('open'); handled = true; }
+    });
+    const results = document.getElementById('searchResults');
+    if(results.classList.contains('open')){ results.classList.remove('open'); handled = true; }
+    if(!handled && document.activeElement && document.activeElement !== document.body && document.activeElement.blur){
+      document.activeElement.blur();
+    }
+  }
+});
+
+window.addEventListener('pywebviewready', loadMeta);
+"""
