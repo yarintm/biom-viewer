@@ -22,6 +22,11 @@ STYLE = """
     --hdr-bg-sel:light-dark(#dcdcd8,#34343a);
     --hdr-fg:light-dark(#3a3a3d,#b8b8bd);
     --nz-bg:light-dark(#c9ecd9,#1f4636); --z-fg:light-dark(#86868b,#7c7c82);
+    /* The full-strength end of the magnitude ramp (see .nz1-.nz6). Chosen
+       so cell text still clears 4.5:1 against it at full strength -- 7.0:1
+       with #1c1c1e in light, 5.1:1 with #e8e8ea in dark -- since the
+       darkest cells are exactly the ones carrying the biggest numbers. */
+    --heat:light-dark(#4cb98a,#2c6b50);
     /* Search matches used to be painted in --nz-bg, i.e. the exact green
        that means "this matrix cell is non-zero" everywhere else on screen.
        Find-highlighting has its own near-universal colour and no competing
@@ -336,10 +341,38 @@ STYLE = """
   .grid-empty{display:flex;flex-direction:column;align-items:center;gap:10px;color:var(--dim)}
   .grid-empty-msg{font-size:13px}
   .z{color:var(--z-fg)}
-  .nz{background:var(--nz-bg)}
+  /* Every non-zero used to be painted the same green, so a 0.001 and a
+     4,800 were visually identical and the only thing the grid could tell
+     you at a glance was where data existed -- not how much. Six steps of
+     the same hue turn the matrix into a picture of its own distribution.
+     Six, not a continuous ramp: the eye can't rank more than a handful of
+     shades of one hue anyway, and buckets keep the theming in CSS instead
+     of scattering computed colours into inline styles on 200 cells a
+     render. The scale is log-spaced -- see heatBucket(). */
+  #heatLegend{display:flex;align-items:center;gap:2px;margin-left:14px;
+             font:10px/1 ui-monospace,monospace;color:var(--dim)}
+  #heatLegend:empty{display:none}
+  #heatLegend b{font-weight:400}
+  #heatLegend b:first-child{margin-right:4px}
+  #heatLegend b:last-child{margin-left:4px}
+  #heatLegend i{width:11px;height:11px;border-radius:2px;border:1px solid var(--cell-border)}
+  .nz{background:color-mix(in srgb, var(--heat) 45%, transparent)}
+  .nz1{background:color-mix(in srgb, var(--heat) 16%, transparent)}
+  .nz2{background:color-mix(in srgb, var(--heat) 31%, transparent)}
+  .nz3{background:color-mix(in srgb, var(--heat) 47%, transparent)}
+  .nz4{background:color-mix(in srgb, var(--heat) 64%, transparent)}
+  .nz5{background:color-mix(in srgb, var(--heat) 82%, transparent)}
+  .nz6{background:var(--heat)}
   .mv{color:var(--fg)}
   .mv-empty{color:var(--z-fg);font-style:italic}
-  .cell:not(.rh):not(.colhdr):not(.stat-cell).hl-row,.cell:not(.rh):not(.colhdr):not(.stat-cell).hl-col{background:var(--hl) !important}
+  /* :not(.nz) -- a shaded cell's background *is* its value now, so painting
+     the selection tint over it would erase the number's magnitude at
+     exactly the moment you selected the row to read it. Zeros carry no
+     magnitude, so they take the tint and the row still reads as a band;
+     the deepened row/column header carries the rest. Metadata cells are
+     never .nz, so those grids are unaffected. */
+  .cell:not(.rh):not(.colhdr):not(.stat-cell):not(.nz).hl-row,
+  .cell:not(.rh):not(.colhdr):not(.stat-cell):not(.nz).hl-col{background:var(--hl) !important}
   /* Must out-specify the rule above, not just follow it -- both are
      !important, so the longer :not() chain there would otherwise win. */
   .cell:not(.rh):not(.colhdr):not(.stat-cell).cell-expanded-row.hl-row,

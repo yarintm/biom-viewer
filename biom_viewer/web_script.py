@@ -10,6 +10,9 @@ window.onerror = (msg, url, line, col) => {
   if(el) el.textContent = `JS error: ${msg} (line ${line}:${col})`;
 };
 let meta=null, rowPage=0, colPage=0, selR=null, selC=null, fontSize=11;
+// Global non-zero range, filled from meta(). Null on an empty or all-zero
+// table, in which case heatBucket() falls back to the flat .nz tint.
+let valueMin=null, valueMax=null;
 let autoRows=20, autoCols=8, rowHPx=22, colWPx=130;
 let availH=0, availW=0;
 // Pinned rows (raw observation indices) and their own selection slot --
@@ -65,6 +68,38 @@ const COLW_TARGET=130, RHW_MIN=60, RHW_MAX=240;
 // back apart on it to title the expanded view -- built by hand in seven
 // places, the two halves would eventually disagree about the spacing.
 const SEL_EQ = '  =  ';
+
+// Which of the six magnitude shades a cell value gets (see .nz1-.nz6).
+//
+// Log-spaced, not linear. Abundance tables are heavily skewed -- a handful
+// of taxa carry most of the signal and the long tail sits orders of
+// magnitude below them -- so a linear ramp against the global maximum puts
+// virtually every cell in the palest bucket and the picture says nothing.
+// Normalising between log(min) and log(max) instead spends the whole
+// palette on the range the data actually occupies.
+//
+// Bounds come from meta() and are global, so the same value is the same
+// colour on every page; a per-page scale would quietly recalibrate itself
+// as you paged and make two screens of one table incomparable.
+// The key to the shading: six swatches between the actual bounds. Only in
+// data mode -- the metadata grids have no magnitudes to shade.
+function renderHeatLegend(){
+  const el = document.getElementById('heatLegend');
+  if(mode!=='data' || valueMax===null || valueMax===undefined){ el.innerHTML = ''; return; }
+  const swatches = [1,2,3,4,5,6].map(i=>`<i class="nz${i}"></i>`).join('');
+  el.innerHTML = `<b>${fmtBound(valueMin)}</b>${swatches}<b>${fmtBound(valueMax)}</b>`;
+  el.title = `Cell shading runs from ${valueMin} to ${valueMax}, log-spaced`;
+}
+
+function heatBucket(v){
+  if(!(v > 0)) return '';
+  if(valueMax === null || valueMax === undefined) return '';
+  const lo = Math.log1p(valueMin), hi = Math.log1p(valueMax);
+  // A table whose non-zeros are all the same value has no distribution to
+  // show; give them all the top shade rather than dividing by zero.
+  const t = hi > lo ? (Math.log1p(v) - lo) / (hi - lo) : 1;
+  return ' nz' + Math.min(6, Math.max(1, Math.ceil(t * 6)));
+}
 let RHW=RHW_MAX;
 function rowsPerPage(){ return autoRows; }
 function colsPerPage(){ return autoCols; }
@@ -416,6 +451,8 @@ async function loadWorkspace(){
 async function loadMeta(){
   try{
     meta = await window.pywebview.api.meta();
+    valueMin = meta.value_min ?? null;
+    valueMax = meta.value_max ?? null;
     rowFields = fieldUnion(meta.row_metadata);
     colFields = fieldUnion(meta.col_metadata);
     // Split into the directory (de-emphasized -- context, not the point)
@@ -911,6 +948,7 @@ async function render(){
     mode!=='col' && !!visObs && visObs.length<meta.rows);
   document.getElementById('colRange').classList.toggle('range-filtered',
     mode!=='row' && !!visSample && visSample.length<meta.cols);
+  renderHeatLegend();
   document.getElementById('rowUp').disabled = rowPage===0;
   document.getElementById('rowDown').disabled = r1>=rowsTotal();
   document.getElementById('colPrev').disabled = colPage===0;
@@ -1109,7 +1147,7 @@ async function render(){
       cell.dataset.pinnedRaw = rawIdx; cell.dataset.c = c;
       if(mode==='data'){
         const v = pinnedData[pi][c-c0];
-        cell.className = 'cell ' + (v===0 ? 'z' : 'nz') + (isLast ? ' pin-last' : '');
+        cell.className = 'cell ' + (v===0 ? 'z' : 'nz' + heatBucket(v)) + (isLast ? ' pin-last' : '');
         cell.textContent = Number.isInteger(v) ? v : v.toFixed(3);
         cell.title = `${label}\n${colLabel(c)} = ${v}`;
         cell.addEventListener('click', ()=>{
@@ -1221,7 +1259,7 @@ async function render(){
       cell.dataset.r = r; cell.dataset.c = c;
       if(mode==='data'){
         const v = data[r-r0][c-c0];
-        cell.className = 'cell ' + (v===0 ? 'z' : 'nz');
+        cell.className = 'cell ' + (v===0 ? 'z' : 'nz' + heatBucket(v));
         cell.textContent = Number.isInteger(v) ? v : v.toFixed(3);
         cell.title = `${rowLabel(r)}\n${colLabel(c)} = ${v}`;
         cell.addEventListener('click', ()=>{

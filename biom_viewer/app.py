@@ -63,6 +63,23 @@ def _histogram(values, buckets=10):
     ]
 
 
+def _value_bounds(table):
+    """Smallest and largest non-zero value in the matrix, for the grid's
+    magnitude shading. Returns Nones when the table is empty or all-zero, in
+    which case the front end falls back to a single flat tint."""
+    try:
+        data = table.matrix_data.data
+    except Exception:
+        return {"value_min": None, "value_max": None}
+    # A stored zero is still a stored value in a sparse matrix (biom keeps
+    # explicit zeros after some operations), so filter rather than trusting
+    # .data to be strictly non-zero.
+    nz = data[data > 0]
+    if nz.size == 0:
+        return {"value_min": None, "value_max": None}
+    return {"value_min": float(nz.min()), "value_max": float(nz.max())}
+
+
 def _numeric_summary(values, total):
     n = len(values)
     if n == 0:
@@ -467,6 +484,14 @@ class Api:
             "create_date": str(table.create_date) if table.create_date else None,
             "row_metadata": [_json_safe(dict(m)) for m in obs_meta] if obs_meta else None,
             "col_metadata": [_json_safe(dict(m)) for m in sample_meta] if sample_meta else None,
+            # Bounds of the non-zero values, so the grid can shade each cell
+            # by magnitude rather than painting every non-zero the same
+            # green. Has to be global: a per-page scale would silently
+            # recalibrate the colours every time you turned a page, making
+            # two screens of the same table incomparable. Read off the
+            # sparse .data array (non-zeros only), so it costs one pass over
+            # the stored values rather than rows x cols.
+            **_value_bounds(table),
         }
 
     def data_window(self, r0, r1, c0, c1):
@@ -607,6 +632,9 @@ PAGE = """<!doctype html>
       <button class="nav" id="colPrev">◀</button>
       <span id="colRange"></span>
       <button class="nav" id="colNext">▶</button>
+      <!-- Cell shading is a new visual language; without the scale beside
+           it, a darker green is just a darker green. Data mode only. -->
+      <span id="heatLegend"></span>
     </div>
     <div id="grid"></div>
   </div>
