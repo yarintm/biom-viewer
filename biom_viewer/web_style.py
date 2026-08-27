@@ -165,6 +165,10 @@ STYLE = """
              caret-color:transparent;transition:color .15s}
   #selected.flash{color:var(--fg)}
   #selected::placeholder{font:12.5px -apple-system,BlinkMacSystemFont,sans-serif;color:var(--dim);opacity:1}
+  #copiedBadge{flex:none;font-size:10.5px;font-weight:700;letter-spacing:.02em;
+             color:var(--accent);opacity:0;transition:opacity var(--dur) var(--ease);
+             pointer-events:none;white-space:nowrap}
+  #copiedBadge.on{opacity:1}
   #expandBtn{flex:none;margin-right:3px}
   button.nav,button.tool{background:var(--panel-bg);color:var(--fg);border:1px solid var(--input-border);border-radius:var(--radius-sm);padding:4px 10px;cursor:pointer;
              font-size:14px;line-height:1;transition:background var(--dur) var(--ease),border-color var(--dur) var(--ease)}

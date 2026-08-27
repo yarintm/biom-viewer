@@ -1256,7 +1256,12 @@ async function render(){
 
 // ponytail: pywebview's page isn't a secure context, so navigator.clipboard is
 // undefined and reading .writeText threw — killing the click handler before it
-// could highlight. Selecting the #selected input also makes plain Cmd+C work.
+// could highlight.
+// Called from ⌘C only. Selecting a cell used to copy it as a side effect,
+// which meant every glance at a value silently destroyed whatever you were
+// carrying on the clipboard -- and since arrow keys now move the selection,
+// a single held keypress would have done it dozens of times. Looking is not
+// taking; copying is its own gesture.
 function copySelected(){
   const inp=document.getElementById('selected');
   inp.focus(); inp.select();
@@ -1292,11 +1297,6 @@ function execCommandCopy(text){
 // JSON. Falls back to `text` for calls (header clicks, status messages) that
 // have no separate raw value.
 let lastSelectedValue = '', lastSelectedLabel = '';
-// Set while a right-click is replaying an element's own click handler to
-// move the selection under the cursor (see the 'contextmenu' listener).
-// Left-clicking a cell deliberately copies it; opening a context menu must
-// not quietly overwrite whatever the user has on the clipboard.
-let suppressSelectionCopy = false;
 function showSelected(text, raw){
   lastSelectedValue = raw!==undefined ? raw : text;
   // The expanded view is a modal that covers the grid, so by the time you
@@ -1310,10 +1310,20 @@ function showSelected(text, raw){
   lastSelectedLabel = (raw!==undefined && eq>=0) ? text.slice(0, eq) : text;
   const inp=document.getElementById('selected');
   inp.value = text;
-  if(!suppressSelectionCopy) copySelected();
   inp.classList.add('flash');
   clearTimeout(showSelected._t);
   showSelected._t = setTimeout(()=>inp.classList.remove('flash'), 700);
+}
+
+// Transient confirmation in the readout bar. Deliberately not a replacement
+// of the readout's text: the value you just copied is the thing you most
+// want still on screen a second later.
+function flashSelected(msg){
+  const badge = document.getElementById('copiedBadge');
+  badge.textContent = msg;
+  badge.classList.add('on');
+  clearTimeout(flashSelected._t);
+  flashSelected._t = setTimeout(()=>badge.classList.remove('on'), 1600);
 }
 
 function prettyPrintValue(v){
@@ -2150,10 +2160,7 @@ document.addEventListener('contextmenu', (e)=>{
   // scheme (paged / pinned-raw / pinned-field) and every label format
   // right, rather than a second copy of that logic here.
   const gridTarget = e.target.closest('#grid .cell');
-  if(gridTarget){
-    suppressSelectionCopy = true;
-    try{ gridTarget.click(); } finally { suppressSelectionCopy = false; }
-  }
+  if(gridTarget) gridTarget.click();
   const headerEl = e.target.closest('.rh, .hdr.colhdr');
   const headerItems = headerEl ? headerContextItems(headerEl) : [];
 
@@ -2478,8 +2485,6 @@ function setFontSize(px){
 // matters. Selection drives the page rather than the other way round: step
 // off the bottom row and the page follows, so the whole axis is reachable
 // without ever touching the nav buttons.
-// Deliberately does not copy: clicking a cell copies it on purpose, but
-// holding down an arrow key must not overwrite the clipboard 40 times.
 // Each step is a full render, and crossing a page boundary is a real fetch
 // over the pywebview bridge. Auto-repeat outruns that easily, so a step
 // that arrives mid-flight is dropped rather than queued -- the cursor lags
@@ -2506,10 +2511,7 @@ async function moveSelectionStep(dr, dc){
   colPage = Math.floor(selC/colsPerPage());
   await render();
   const cell = document.querySelector(`#grid .cell[data-r="${selR}"][data-c="${selC}"]`);
-  if(cell){
-    suppressSelectionCopy = true;
-    try{ cell.click(); } finally { suppressSelectionCopy = false; }
-  }
+  if(cell) cell.click();
 }
 const ARROW_DELTA = {ArrowUp:[-1,0], ArrowDown:[1,0], ArrowLeft:[0,-1], ArrowRight:[0,1]};
 
@@ -2529,6 +2531,21 @@ document.addEventListener('keydown', (e)=>{
   }
   if(mod){
     const k = e.key.toLowerCase();
+    // ⌘C copies the current selection -- but only when the user hasn't
+    // selected text of their own somewhere (a modal's code block, the
+    // readout bar) and isn't typing in a field. In those cases the native
+    // copy is what they meant, and hijacking it would be the same
+    // clipboard theft that auto-copy-on-click was.
+    if(k==='c'){
+      const ownSelection = (window.getSelection()||{toString:()=>''}).toString().length > 0;
+      const typing = /^(INPUT|TEXTAREA)$/.test((document.activeElement||{}).tagName||'');
+      if(!ownSelection && !typing && document.getElementById('selected').value){
+        e.preventDefault();
+        copySelected();
+        flashSelected('Copied');
+      }
+      return;
+    }
     if(k==='f'){ e.preventDefault(); document.getElementById('searchBox').focus(); }
     else if(k==='r'){ e.preventDefault(); openReplaceModal(); }
     else if(k==='e'){ e.preventDefault(); openExportModal(); }

@@ -589,7 +589,10 @@ PAGE = """<!doctype html>
        the instructional prose it is (system font) while real selected
        content still lands in the monospace value slot -- and so it comes
        back on its own if the field is ever cleared. -->
-  <input id="selected" readonly placeholder="Click a row, column, or cell to see its full text here (auto-copied). Arrow keys move the selection; double-click a header for summary stats.">
+  <input id="selected" readonly placeholder="Click a row, column, or cell to see its full text here. Arrow keys move the selection, ⌘C copies it, double-click a header for summary stats.">
+  <!-- Copying is now an explicit gesture rather than a side effect of
+       clicking, so it needs to visibly confirm that it happened. -->
+  <span id="copiedBadge" aria-live="polite"></span>
   <button class="tool" id="expandBtn" title="View full content in a window (⌘⏎)">⤢</button>
 </div>
 
