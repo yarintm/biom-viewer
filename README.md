@@ -78,6 +78,10 @@ Double-click a sample header and you get the same summary for every sample
 side by side, since that band spans the full width either way. Same from
 **View → Show All Summary Stats**, and double-clicking again puts it away.
 
+Every summary describes the samples and observations you have filtered *to*,
+not the whole file — filter to your 12 responders and the nonzero counts are
+theirs.
+
 <p align="center">
   <img src="docs/screenshot-stats.png" width="100%" alt="A single observation row expanded in place to show its summary: nonzero count and percentage, a distribution histogram, and its minimum and maximum abundance">
 </p>

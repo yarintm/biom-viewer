@@ -1479,13 +1479,13 @@ function fmtNum(v){ return Number.isInteger(v) ? String(v) : v.toFixed(2); }
 function rowStatsFetch(r){
   return mode==='col'
     ? window.pywebview.api.field_summary('sample', colFieldAt(r), visSample)
-    : window.pywebview.api.row_summary(obsAt(r));
+    : window.pywebview.api.row_summary(obsAt(r), visSample);
 }
 
 function colStatsFetch(j){
   return mode==='row'
     ? window.pywebview.api.field_summary('observation', rowFields[j], visObs)
-    : window.pywebview.api.col_summary(sampleAt(j));
+    : window.pywebview.api.col_summary(sampleAt(j), visObs);
 }
 
 // Sort/filter/rename/pin used to live as four always-visible icon buttons
