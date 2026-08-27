@@ -636,7 +636,13 @@ PAGE = """<!doctype html>
            it, a darker green is just a darker green. Data mode only. -->
       <span id="heatLegend"></span>
     </div>
-    <div id="grid"></div>
+    <!-- Parsing a large .biom takes real time, and the app used to sit
+         there as a blank frame with "loading…" hidden in the toolbar.
+         Markup rather than JS so it is on screen in the first paint;
+         render() clears the class on the first successful draw. -->
+    <div id="grid" class="grid-empty-state">
+      <div class="grid-empty"><div class="grid-empty-msg">Loading…</div></div>
+    </div>
   </div>
 </div>
 <div id="replaceOverlay" class="wm-overlay">

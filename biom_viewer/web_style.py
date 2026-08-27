@@ -340,6 +340,11 @@ STYLE = """
              align-items:center;justify-content:center;border:none}
   .grid-empty{display:flex;flex-direction:column;align-items:center;gap:10px;color:var(--dim)}
   .grid-empty-msg{font-size:13px}
+  /* Kept selectable and monospace: when this is a load failure the detail
+     is an exception the user may well want to paste somewhere. */
+  .grid-empty-detail{font:11.5px/1.45 ui-monospace,monospace;color:var(--z-fg);
+             max-width:min(560px,80vw);text-align:center;white-space:pre-wrap;
+             overflow-wrap:anywhere;-webkit-user-select:text;user-select:text}
   .z{color:var(--z-fg)}
   /* Every non-zero used to be painted the same green, so a 0.001 and a
      4,800 were visually identical and the only thing the grid could tell

@@ -470,9 +470,29 @@ async function loadMeta(){
     render();
     renderAxisChips();
   } catch(err){
-    document.getElementById('filename').textContent = `Failed to load: ${err}`;
+    // This used to write the raw exception into the filename slot in the
+    // toolbar -- a 60px-minimum flex box that would have shown roughly
+    // "Failed to l…" above an otherwise blank app, with the actual reason
+    // unreachable. The grid is where the user is looking and has the room.
     console.error(err);
+    showGridMessage('Couldn’t open this file', String(err && err.message || err));
   }
+}
+
+// The grid area doubles as the app's message surface: nothing to show
+// (filtered to empty), nothing yet (loading), or nothing possible (a load
+// failure). One layout for all three so they can't drift apart.
+function showGridMessage(msg, detail, action){
+  const grid = document.getElementById('grid');
+  grid.className = 'grid-empty-state';
+  grid.style.gridTemplateColumns = '';
+  grid.style.gridTemplateRows = '';
+  grid.innerHTML = `<div class="grid-empty">` +
+    `<div class="grid-empty-msg">${escapeHtml(msg)}</div>` +
+    (detail ? `<div class="grid-empty-detail">${escapeHtml(detail)}</div>` : '') +
+    (action ? `<button class="tool grid-empty-clear">${escapeHtml(action.label)}</button>` : '') +
+    `</div>`;
+  if(action) grid.querySelector('.grid-empty-clear').onclick = action.onClick;
 }
 
 function pageBounds(page, perPage, total){
@@ -960,17 +980,11 @@ async function render(){
   // header across implicit columns -- the table dissolved into a wrapped
   // heap of orange chips. Say what happened instead, and offer the way out.
   if(rowsTotal()===0 || colsTotal()===0){
-    const grid = document.getElementById('grid');
-    grid.className = 'grid-empty-state';
-    grid.style.gridTemplateColumns = '';
-    grid.style.gridTemplateRows = '';
     const axisWord = colsTotal()===0
       ? (mode==='row' ? 'fields' : 'columns')
       : (mode==='col' ? 'fields' : 'rows');
-    grid.innerHTML = `<div class="grid-empty">` +
-      `<div class="grid-empty-msg">No ${axisWord} match the current filters</div>` +
-      `<button class="tool grid-empty-clear">Clear all filters</button></div>`;
-    grid.querySelector('.grid-empty-clear').onclick = clearAllChips;
+    showGridMessage(`No ${axisWord} match the current filters`, '',
+      {label: 'Clear all filters', onClick: clearAllChips});
     return;
   }
 
