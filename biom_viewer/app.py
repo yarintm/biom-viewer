@@ -510,16 +510,30 @@ class Api:
         sub = self._table.matrix_data.tocsr()[row_idxs, :].tocsc()[:, col_idxs]
         return sub.toarray().tolist()
 
-    def row_summary(self, r):
-        return _axis_summary(self._table.matrix_data.tocsr()[r, :], self._table.shape[1])
+    def row_summary(self, r, col_idxs=None):
+        """Summarize observation `r` across `col_idxs` (the samples currently
+        visible), or across every sample when None. Without the filter the
+        numbers describe a table the user is not looking at: filter 1,638
+        samples down to 12 and an unfiltered nonzero count still counts all
+        1,638."""
+        vec = self._table.matrix_data.tocsr()[r, :]
+        if col_idxs is None:
+            return _axis_summary(vec, self._table.shape[1])
+        return _axis_summary(vec.tocsc()[:, col_idxs], len(col_idxs))
 
     def _csc(self):
         if self._csc_matrix is None:
             self._csc_matrix = self._table.matrix_data.tocsc()
         return self._csc_matrix
 
-    def col_summary(self, c):
-        return _axis_summary(self._csc()[:, c], self._table.shape[0])
+    def col_summary(self, c, row_idxs=None):
+        """Summarize sample `c` across `row_idxs` (the observations currently
+        visible), or across every observation when None. Same reasoning as
+        row_summary."""
+        vec = self._csc()[:, c]
+        if row_idxs is None:
+            return _axis_summary(vec, self._table.shape[0])
+        return _axis_summary(vec.tocsr()[row_idxs, :], len(row_idxs))
 
     def field_summary(self, axis, field, idxs=None):
         return field_summary(self._table, axis, field, idxs)
@@ -831,6 +845,11 @@ def main():
             MenuAction("Decrease Font Size", js("setFontSize(fontSize-1)")),
             MenuSeparator(),
             MenuAction("Expand Selected Cell…", js("openCellModal()")),
+            MenuSeparator(),
+            # Double-clicking a header expands that one row/column; this is
+            # the every-column version, which has no gesture of its own on
+            # purpose -- it is the heavier view, so it should be asked for.
+            MenuAction("Show All Summary Stats", js("toggleSummaryAll()")),
         ]),
     ]
     webview.start(menu=menu)

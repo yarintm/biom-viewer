@@ -68,6 +68,24 @@ at a time or all at once.
   <img src="docs/screenshot-filters.png" width="100%" alt="The table filtered to non-control samples with calprotectin at or above 100, sorted by genus, with one removable chip per active sort and filter">
 </p>
 
+### Summary statistics, for exactly what you asked about
+
+Double-click an observation and just that row expands in place — nonzero
+count, distribution, min and max, or a top-values breakdown if it is a
+categorical metadata field.
+
+Double-click a sample header and you get the same summary for every sample
+side by side, since that band spans the full width either way. Same from
+**View → Show All Summary Stats**, and double-clicking again puts it away.
+
+Every summary describes the samples and observations you have filtered *to*,
+not the whole file — filter to your 12 responders and the nonzero counts are
+theirs.
+
+<p align="center">
+  <img src="docs/screenshot-stats.png" width="100%" alt="A single observation row expanded in place to show its summary: nonzero count and percentage, a distribution histogram, and its minimum and maximum abundance">
+</p>
+
 ### Search across everything at once
 
 ⌘F searches observation IDs, sample IDs, metadata field names and metadata
@@ -80,8 +98,6 @@ highlighted in place.
 
 ### And the rest
 
-- **Summary statistics** — double-click any header for a histogram, min/max,
-  distinct counts and top values
 - **Saved views** — name a set of filters, sorts and pins, and come back to it
 - **Undo/redo** (⌘Z / ⇧⌘Z) across every edit, each step naming what it undid
 - **Find & replace** across metadata values (⌘R)

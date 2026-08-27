@@ -569,3 +569,30 @@ def test_api_two_instances_same_table_id_share_a_workspace(tmp_path):
     first.save_view("A", make_view_state().to_payload())
 
     assert [v["name"] for v in second.load_workspace()["views"]] == ["A"]
+
+
+def test_row_summary_without_idxs_covers_every_sample():
+    s = api(make_table()).row_summary(1)  # [2, 0, 0, 5]
+    assert s["n"] == 4
+    assert s["nonzero"] == 2
+    assert s["min"] == 2.0
+    assert s["max"] == 5.0
+
+
+def test_row_summary_restricted_to_visible_samples():
+    # Same row, but only samples s1 and s2 ([2, 0]) are left after filtering.
+    s = api(make_table()).row_summary(1, [0, 1])
+    assert s["n"] == 2
+    assert s["nonzero"] == 1
+    assert s["max"] == 2.0  # the 5 in s4 is filtered out, not just hidden
+    assert s["sparsity"] == 50.0
+
+
+def test_col_summary_restricted_to_visible_observations():
+    # Sample s4 is [0, 5, 0]; keeping observations obs1 and obs3 leaves it empty.
+    a = api(make_table())
+    assert a.col_summary(3)["nonzero"] == 1
+    s = a.col_summary(3, [0, 2])
+    assert s["n"] == 2
+    assert s["nonzero"] == 0
+    assert s["max"] is None

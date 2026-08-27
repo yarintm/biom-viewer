@@ -27,16 +27,20 @@ let selPinnedRaw = null;
 // directly, see deleteField's cleanup) rather than a numeric index.
 let pinnedColFields = new Set();
 let selPinnedField = null;
-let summaryVisible=false;
-// In 'col' mode, double-clicking one row header expands just that field's
-// row to a stat summary (instead of summaryVisible's "expand every row").
+// Off by default and reachable only from the View menu. It used to be what
+// double-clicking any header did, which meant the expensive, every-column
+// view was the thing you got by accident while the single summary -- the one
+// you actually asked for by clicking that one header -- was unreachable.
+let summaryAll=false;
+// Double-clicking one row header expands just that row to a stat summary:
+// a metadata field in 'col' mode, an observation everywhere else.
 let expandedFieldRow=null;
 // Pinned fields live outside the paged position space expandedFieldRow
 // indexes into (see colFieldsForPaging), so their own double-click expand
 // needs a name-keyed twin instead of a position index. Mutually exclusive
 // with expandedFieldRow -- only one field row is ever expanded at a time.
 let expandedPinnedField=null;
-function anyFieldRowExpanded(){ return stripOnRows() || (mode==='col' && (expandedFieldRow!=null || expandedPinnedField!=null)); }
+function anyFieldRowExpanded(){ return stripOnRows() || expandedFieldRow!=null || expandedPinnedField!=null; }
 // Expanding/collapsing a row changes rowsPerPage() (the expanded row eats
 // extra height budget), which shifts which fields "page N" covers -- so the
 // clicked row can silently scroll off the page it was just clicked on.
@@ -45,6 +49,7 @@ function anyFieldRowExpanded(){ return stripOnRows() || (mode==='col' && (expand
 function toggleFieldRow(r){
   expandedFieldRow = (expandedFieldRow===r) ? null : r;
   expandedPinnedField = null;
+  summaryAll = false;
   computeFit();
   const maxPage = Math.max(0, Math.ceil(rowsTotal()/rowsPerPage()) - 1);
   rowPage = Math.min(Math.floor(r/rowsPerPage()), maxPage);
@@ -156,16 +161,23 @@ function statRowH(){
 // list is what gets summarized on the row side, because it's the only case
 // where the row axis is small (bounded by field count, not by taxa/sample
 // count) — tall rows are only affordable there.
-function stripOnRows(){ return summaryVisible && mode==='col'; }
-function stripOnCols(){ return summaryVisible && mode!=='col'; }
+function stripOnRows(){ return summaryAll && mode==='col'; }
+// No single-column equivalent of expandedFieldRow, on purpose: an expanded
+// row spends only its own row, but this track spans the full width whether
+// one column fills it or all of them -- so filling just the double-clicked
+// one would pay for the whole band and use an eighth of it.
+function stripOnCols(){ return mode!=='col' && summaryAll; }
 
 // Toggling the strip can drastically shrink rowsPerPage() (tall stat rows
 // fit far fewer per page than plain rows), so the page that used to show
 // row `centerRow` may no longer be page 0. Recompute fit first, then land
 // on whichever page actually contains centerRow — otherwise the view jumps
 // back to the top of the list instead of staying on what was clicked.
-function toggleSummary(centerRow){
-  summaryVisible = !summaryVisible;
+function toggleSummaryAll(centerRow){
+  summaryAll = !summaryAll;
+  // The two are alternative answers to the same question, so turning on the
+  // broad one clears the narrow one rather than stacking two stat tracks.
+  if(summaryAll){ expandedFieldRow = null; expandedPinnedField = null; }
   computeFit();
   const maxPage = Math.max(0, Math.ceil(rowsTotal()/rowsPerPage()) - 1);
   rowPage = centerRow!==undefined ? Math.floor(centerRow/rowsPerPage()) : Math.min(rowPage, maxPage);
@@ -200,7 +212,7 @@ function computeFit(){
     // the same tall track in this view (they're rendered as stat rows
     // too), so they compete for it exactly like paged fields do.
     autoRows = Math.max(1, Math.floor((availH - shortRowH) / statRowH()) - pinnedCount);
-  } else if(mode==='col' && expandedFieldRow!=null){
+  } else if(expandedFieldRow!=null){
     // One field row is expanded to a stat block; the rest stay short. This
     // reserves the budget even if the expanded row isn't on the current
     // page -- ponytail: slightly conservative, avoids a fit/page chicken-egg.
@@ -438,7 +450,7 @@ const modeBtns = [...document.querySelectorAll('#modeGroup button')];
 
 function setMode(m){
   mode = m;
-  if(m!=='col'){ expandedFieldRow = null; expandedPinnedField = null; }
+  expandedFieldRow = null; expandedPinnedField = null;
   modeBtns.forEach(x=>x.classList.toggle('active', x.dataset.m===m));
   document.body.className = 'mode-'+m;
   document.getElementById('modeTag').textContent =
@@ -1045,7 +1057,7 @@ async function render(){
   // Stretch to fill availH x availW, but never past the auto-fit page size —
   // a partial last page keeps normal-height rows instead of ballooning.
   const renderedRows = r1-r0, renderedCols = c1-c0;
-  const fieldExpandedIdx = (mode==='col' && !stripOnRows() && expandedFieldRow!=null
+  const fieldExpandedIdx = (!stripOnRows() && expandedFieldRow!=null
     && expandedFieldRow>=r0 && expandedFieldRow<r1) ? expandedFieldRow : null;
   let headerRowHPx, rowHeights = null;
   if(stripOnRows()){
@@ -1113,7 +1125,7 @@ async function render(){
     ? await Promise.all(pinnedFieldsOrdered.map(f => window.pywebview.api.field_summary('sample', f, visSample)))
     : null;
   const fieldExpandedStat = fieldExpandedIdx!=null
-    ? await window.pywebview.api.field_summary('sample', colFieldAt(fieldExpandedIdx), visSample)
+    ? await rowStatsFetch(fieldExpandedIdx)
     : null;
   const pinnedFieldExpandedStat = (expandedPinnedField!=null && !stripOnRows())
     ? await window.pywebview.api.field_summary('sample', expandedPinnedField, visSample)
@@ -1155,7 +1167,7 @@ async function render(){
       showSelected(label);
       applyHighlight();
     });
-    h.addEventListener('dblclick', ()=>{ toggleSummary(); });
+    h.addEventListener('dblclick', ()=>{ toggleSummaryAll(); });
     grid.appendChild(h);
   }
   if(stripOnCols()){
@@ -1291,10 +1303,7 @@ async function render(){
       showSelected(label);
       applyHighlight();
     });
-    rh.addEventListener('dblclick', ()=>{
-      if(mode==='col') toggleFieldRow(r);
-      else toggleSummary(r);
-    });
+    rh.addEventListener('dblclick', ()=>{ toggleFieldRow(r); });
     grid.appendChild(rh);
     for(let c=c0;c<c1;c++){
       const cell = document.createElement('div');
@@ -1464,10 +1473,19 @@ function fmtNum(v){ return Number.isInteger(v) ? String(v) : v.toFixed(2); }
 // The column axis is field-driven only in 'row' mode (observation metadata
 // fields replace samples); everywhere else it's the sample axis, unchanged
 // from data mode. Matches colLabel's own mode branch.
+// The row axis is field-driven only in 'col' mode; everywhere else a row is
+// an observation, and its summary runs across the samples -- which is what
+// row_summary has always computed, though until now nothing ever called it.
+function rowStatsFetch(r){
+  return mode==='col'
+    ? window.pywebview.api.field_summary('sample', colFieldAt(r), visSample)
+    : window.pywebview.api.row_summary(obsAt(r), visSample);
+}
+
 function colStatsFetch(j){
   return mode==='row'
     ? window.pywebview.api.field_summary('observation', rowFields[j], visObs)
-    : window.pywebview.api.col_summary(sampleAt(j));
+    : window.pywebview.api.col_summary(sampleAt(j), visObs);
 }
 
 // Sort/filter/rename/pin used to live as four always-visible icon buttons
