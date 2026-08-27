@@ -70,10 +70,13 @@ at a time or all at once.
 
 ### Summary statistics, for exactly what you asked about
 
-Double-click any observation or sample header and just that one expands in
-place — nonzero count, spread, min and max, or a top-values breakdown for a
-categorical metadata field. **View → Show All Summary Stats** turns it on for
-every column at once when you want to compare across samples.
+Double-click an observation and just that row expands in place — nonzero
+count, distribution, min and max, or a top-values breakdown if it is a
+categorical metadata field.
+
+Double-click a sample header and you get the same summary for every sample
+side by side, since that band spans the full width either way. Same from
+**View → Show All Summary Stats**, and double-clicking again puts it away.
 
 <p align="center">
   <img src="docs/screenshot-stats.png" width="100%" alt="A single observation row expanded in place to show its summary: nonzero count and percentage, a distribution histogram, and its minimum and maximum abundance">
