@@ -831,6 +831,11 @@ def main():
             MenuAction("Decrease Font Size", js("setFontSize(fontSize-1)")),
             MenuSeparator(),
             MenuAction("Expand Selected Cell…", js("openCellModal()")),
+            MenuSeparator(),
+            # Double-clicking a header expands that one row/column; this is
+            # the every-column version, which has no gesture of its own on
+            # purpose -- it is the heavier view, so it should be asked for.
+            MenuAction("Show All Summary Stats", js("toggleSummaryAll()")),
         ]),
     ]
     webview.start(menu=menu)
