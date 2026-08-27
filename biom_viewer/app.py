@@ -595,8 +595,8 @@ PAGE = """<!doctype html>
   <span id="toolbar">
     <span id="modeGroup">
       <button class="active" data-m="data">Data</button>
-      <button data-m="row">Row metadata</button>
-      <button data-m="col">Col metadata</button>
+      <button data-m="row">Observation metadata</button>
+      <button data-m="col">Sample metadata</button>
     </span>
     <span id="searchWrap">
       <input id="searchBox" type="text" placeholder="Search…" autocomplete="off">
@@ -614,7 +614,7 @@ PAGE = """<!doctype html>
        the instructional prose it is (system font) while real selected
        content still lands in the monospace value slot -- and so it comes
        back on its own if the field is ever cleared. -->
-  <input id="selected" readonly placeholder="Click a row, column, or cell to see its full text here. Arrow keys move the selection, ⌘C copies it, double-click a header for summary stats.">
+  <input id="selected" readonly placeholder="Click an observation, sample, or cell to see its full text here. Arrow keys move the selection, ⌘C copies it, double-click a header for summary stats.">
   <!-- Copying is now an explicit gesture rather than a side effect of
        clicking, so it needs to visibly confirm that it happened. -->
   <span id="copiedBadge" aria-live="polite"></span>
@@ -657,8 +657,8 @@ PAGE = """<!doctype html>
     <div class="rp-form">
       <label class="rp-label" for="rpAxis">Search in</label>
       <select id="rpAxis">
-        <option value="observation">Observation (row) metadata</option>
-        <option value="sample">Sample (col) metadata</option>
+        <option value="observation">Observation metadata</option>
+        <option value="sample">Sample metadata</option>
       </select>
       <label class="rp-label" for="rpField">Field</label>
       <select id="rpField"></select>

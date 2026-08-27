@@ -442,7 +442,7 @@ function setMode(m){
   modeBtns.forEach(x=>x.classList.toggle('active', x.dataset.m===m));
   document.body.className = 'mode-'+m;
   document.getElementById('modeTag').textContent =
-    m==='col' ? 'COL METADATA' : m==='row' ? 'ROW METADATA' : '';
+    m==='col' ? 'SAMPLE METADATA' : m==='row' ? 'OBSERVATION METADATA' : '';
   scheduleAutosave();
 }
 
@@ -785,8 +785,10 @@ let searchQuery = '', searchValueQuery = '';
 // the panel scrolls. ponytail: plain slice, virtualize only if 200 rows drag.
 const ALL_CAP = 6, TAB_CAP = 200;
 const SEARCH_KINDS = [
-  ['samples', 'Samples'], ['taxa', 'Taxa'],
-  ['rowFields', 'Row fields'], ['colFields', 'Col fields'], ['values', 'Values'],
+  // 'Taxa' was a third name for the observation axis, sitting next to
+  // 'Observation fields' in the same tab strip. The internal key stays taxa.
+  ['samples', 'Samples'], ['taxa', 'Observations'],
+  ['rowFields', 'Observation fields'], ['colFields', 'Sample fields'], ['values', 'Values'],
 ];
 
 // Long hierarchical identifiers (taxonomy strings) sharing a common prefix
@@ -974,13 +976,19 @@ async function render(){
   computeFit();
   const [r0,r1] = pageBounds(rowPage, rowsPerPage(), rowsTotal());
   const [c0,c1] = pageBounds(colPage, colsPerPage(), colsTotal());
-  const rowWord = mode==='data' ? 'rows' : 'fields';
-  // "rows 1-0 / 0" when a filter matches nothing -- count the empty case
-  // out rather than letting the arithmetic print a range that runs backwards.
+  // Which axis holds what depends on the mode, and the pager has to name the
+  // thing it is actually paging: only 'col' mode puts fields down the side
+  // (the old test was mode==='data', which mislabelled 'row' mode's
+  // observations as "fields"), and only 'row' mode puts fields across the top.
+  const rowWord = mode==='col' ? 'fields' : 'observations';
+  const colWord = mode==='row' ? 'fields' : 'samples';
+  // "observations 1-0 / 0" when a filter matches nothing -- count the empty
+  // case out rather than letting the arithmetic print a range that runs
+  // backwards.
   document.getElementById('rowRange').textContent = rowsTotal()===0
     ? `no ${rowWord}` : `${rowWord} ${r0+1}-${r1} / ${rowsTotal()}`;
   document.getElementById('colRange').textContent = colsTotal()===0
-    ? 'no cols' : `cols ${c0+1}-${c1} / ${colsTotal()}`;
+    ? `no ${colWord}` : `${colWord} ${c0+1}-${c1} / ${colsTotal()}`;
   // Red = a filter (not just a sort) actually shrank this axis below its
   // full count -- the fields axis (rowFields/colFields) is never filtered,
   // so only flag the id axis in the modes where it's actually on screen.
@@ -1000,10 +1008,10 @@ async function render(){
   // header across implicit columns -- the table dissolved into a wrapped
   // heap of orange chips. Say what happened instead, and offer the way out.
   if(rowsTotal()===0 || colsTotal()===0){
-    const axisWord = colsTotal()===0
-      ? (mode==='row' ? 'fields' : 'columns')
-      : (mode==='col' ? 'fields' : 'rows');
-    showGridMessage(`No ${axisWord} match the current filters`, '',
+    const emptyWord = colsTotal()===0
+      ? (mode==='row' ? 'fields' : 'samples')
+      : (mode==='col' ? 'fields' : 'observations');
+    showGridMessage(`No ${emptyWord} match the current filters`, '',
       {label: 'Clear all filters', onClick: clearAllChips});
     return;
   }
@@ -1579,7 +1587,7 @@ function unrenameField(axis, field){
 }
 
 function deleteField(axis, field){
-  recordHistory('delete column ' + fieldDisplay(axis, field));
+  recordHistory('delete ' + axisWord(axis) + ' field ' + fieldDisplay(axis, field));
   const fieldsArr = axis==='observation' ? rowFields : colFields;
   const idx = fieldsArr.indexOf(field);
   if(idx>=0) fieldsArr.splice(idx, 1);
@@ -1602,7 +1610,7 @@ function deleteField(axis, field){
 }
 
 function undeleteField(axis, field){
-  recordHistory('restore column ' + field);
+  recordHistory('restore ' + axisWord(axis) + ' field ' + field);
   axisState[axis].deletedFields = axisState[axis].deletedFields.filter(f=>f!==field);
   const fieldsArr = axis==='observation' ? rowFields : colFields;
   if(!fieldsArr.includes(field)) fieldsArr.push(field);
@@ -1614,13 +1622,17 @@ function undeleteField(axis, field){
 // One chip per active sort and per active filter (not one combined chip per
 // axis) so each can be read and removed independently -- a single "3
 // filters" chip told you nothing about what was actually filtered.
-// The chips used to label their axis 'observation'/'sample' -- the internal
-// axis keys -- while the mode buttons two rows above said "Row metadata" /
-// "Col metadata" for the same two axes. One vocabulary; row/col wins because
-// the rest of the UI (rowNav, colNav, "rows 1-26 / 60") already speaks it.
-// The replace dialog's "Observation (row) metadata" keeps the mapping to BIOM
-// terminology visible for anyone who needs it.
-function axisLabel(axis){ return axis==='observation' ? 'rows' : 'cols'; }
+// The app used to speak two vocabularies for the same two axes: chips said
+// 'observation'/'sample' (the internal axis keys) while the mode buttons and
+// the pagers said row/col. One wins, and it's the BIOM one -- a row IS an
+// observation and a column IS a sample, but only the latter pair says which
+// is which when the table is transposed into a metadata view. Grid geometry
+// (.hl-row, wm-row, rowPage) keeps its row/col names; that's layout, not data.
+function axisWord(axis, plural){
+  const one = axis==='observation' ? 'observation' : 'sample';
+  return plural ? one + 's' : one;
+}
+function axisLabel(axis){ return axisWord(axis, true); }
 
 function renderAxisChips(){
   const chips = [];
@@ -2341,7 +2353,7 @@ function statCellHtml(s){
   const otherDistinct = s.distinct - shownCount;
   const otherRows = presentTotal - s.top.slice(0, 3).reduce((a, t) => a + t.count, 0);
   const other = otherDistinct > 0
-    ? `<div class="stat-line stat-other" title="View all ${s.distinct} values">+${otherDistinct} more (${otherRows} rows)</div>`
+    ? `<div class="stat-line stat-other" title="View all ${s.distinct} values">+${otherDistinct} more (${otherRows} entries)</div>`
     : '';
   return `<div class="stat-line">${presence}</div>` +
     `<div class="stat-line">Distinct <b>${s.distinct}</b> (${distinctPct}%)</div>` +
