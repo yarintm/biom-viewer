@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "biom-viewer"
-version = "0.1.0"
+version = "0.2.0"
 description = "Instant, lazy-loading viewer for .biom (Biological Observation Matrix) files — no CLI conversion, no dense-matrix memory blowup."
 readme = "README.md"
 requires-python = ">=3.9"
