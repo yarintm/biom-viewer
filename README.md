@@ -118,6 +118,15 @@ unsigned because signing needs a paid Apple Developer account.
 To open `.biom` files by double-clicking: right-click one → **Get Info** →
 **Open with** → **BiomViewer** → **Change All…**.
 
+### Homebrew
+
+```bash
+brew tap yarintm/biom-viewer
+brew install --cask biom-viewer
+```
+
+Same unsigned-app Gatekeeper warning applies on first launch as above.
+
 ### From source
 
 Any platform, though only macOS is packaged and tested:
