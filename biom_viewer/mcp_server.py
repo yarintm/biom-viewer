@@ -79,10 +79,17 @@ def create_view(
       {"field": str, "kind": "numeric", "min": float, "max": float} or
       {"field": str, "kind": "categorical", "text": str}
     observation_sort / sample_sort: {"field": str, "dir": 1 or -1} or None.
+    row_fields / col_fields: WHITELISTS, not a "these fields matter" hint --
+      if given, only these metadata fields are shown in row/col-metadata
+      mode and every other field on that axis is hidden from the table
+      entirely. Leave as None (the default) to keep every field visible;
+      only pass a list when the user explicitly wants fields other than
+      these hidden.
     pinned_observation_ids: raw observation row indices to freeze on screen
       (get these from meta()'s row_ids order, index 0-based).
     pinned_column_fields: metadata field names to freeze in col-metadata mode,
-      e.g. ["diagnosis"].
+      e.g. ["diagnosis"]. This does NOT hide other fields -- use col_fields
+      for that.
     """
     payload = {
         "mode": mode,
