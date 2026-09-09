@@ -226,6 +226,55 @@ def test_build_export_table_applies_filter_sort_rename_delete_replace():
     assert list(table.ids(axis="observation")) == ["o1", "o2"]
 
 
+def test_build_export_table_applies_column_sets_creating_a_new_field():
+    # "Tag Filtered Rows" lets a user build up a brand-new metadata column
+    # one filtered subset at a time -- each columnSet sets one literal value
+    # for exactly the ids recorded when they clicked "Tag". Two columnSets
+    # covering disjoint ids should together populate every row; an id no
+    # longer on the axis must be dropped rather than raising.
+    spec = {
+        "sample": {
+            "ids": None,
+            "replacements": [],
+            "renames": {},
+            "deletedFields": [],
+            "columnSets": [
+                {"field": "cohort", "value": "A", "ids": ["s2", "s3"]},
+                {"field": "cohort", "value": "B", "ids": ["s4", "s5", "no-such-id"]},
+            ],
+        },
+        "observation": {"ids": None, "replacements": [], "renames": {}, "deletedFields": []},
+    }
+    table = app.build_export_table(make_table_with_sample_metadata(), spec)
+    md = dict(zip(table.ids(axis="sample"), table.metadata(axis="sample")))
+    assert md["s2"]["cohort"] == "A"
+    assert md["s3"]["cohort"] == "A"
+    assert md["s4"]["cohort"] == "B"
+    assert md["s5"]["cohort"] == "B"
+
+
+def test_build_export_table_applies_column_sets_later_entry_wins():
+    # Two columnSets touching the same id/field -- e.g. the user re-tagged
+    # after adjusting a filter -- should merge with the later one winning,
+    # since add_metadata merges by key rather than replacing wholesale.
+    spec = {
+        "sample": {
+            "ids": None,
+            "replacements": [],
+            "renames": {},
+            "deletedFields": [],
+            "columnSets": [
+                {"field": "cohort", "value": "A", "ids": ["s2"]},
+                {"field": "cohort", "value": "B", "ids": ["s2"]},
+            ],
+        },
+        "observation": {"ids": None, "replacements": [], "renames": {}, "deletedFields": []},
+    }
+    table = app.build_export_table(make_table_with_sample_metadata(), spec)
+    md = dict(zip(table.ids(axis="sample"), table.metadata(axis="sample")))
+    assert md["s2"]["cohort"] == "B"
+
+
 def test_build_export_table_normalizes_inconsistent_metadata_keys(tmp_path):
     # Real-world biom files routinely have per-id metadata dicts that
     # disagree on which keys are present (an optional field missing
@@ -400,6 +449,40 @@ def test_workspace_find_view_returns_none_when_missing():
     assert result is None
 
 
+def test_workspace_move_view_sets_folder():
+    workspace = Workspace.empty()
+    workspace.upsert_view(SavedView(name="A", state=make_view_state(), saved_at="t"))
+
+    workspace.move_view("A", "QC subsets")
+
+    assert workspace.find_view("A").folder == "QC subsets"
+
+
+def test_workspace_rename_folder_updates_every_member_view():
+    workspace = Workspace.empty()
+    workspace.upsert_view(SavedView(name="A", state=make_view_state(), saved_at="t", folder="Old"))
+    workspace.upsert_view(SavedView(name="B", state=make_view_state(), saved_at="t", folder="Old"))
+    workspace.upsert_view(SavedView(name="C", state=make_view_state(), saved_at="t"))
+
+    workspace.rename_folder("Old", "New")
+
+    assert workspace.find_view("A").folder == "New"
+    assert workspace.find_view("B").folder == "New"
+    assert workspace.find_view("C").folder is None
+
+
+def test_workspace_delete_folder_clears_folder_on_member_views_only():
+    workspace = Workspace.empty()
+    workspace.upsert_view(SavedView(name="A", state=make_view_state(), saved_at="t", folder="Gone"))
+    workspace.upsert_view(SavedView(name="B", state=make_view_state(), saved_at="t", folder="Stays"))
+
+    workspace.delete_folder("Gone")
+
+    assert workspace.find_view("A").folder is None
+    assert workspace.find_view("B").folder == "Stays"
+    assert [v.name for v in workspace.views] == ["A", "B"]  # deleting a folder doesn't delete its views
+
+
 def test_workspace_round_trips_through_payload():
     workspace = Workspace(current=make_view_state(), views=[SavedView(name="A", state=make_view_state(), saved_at="t")])
 
@@ -557,6 +640,38 @@ def test_api_rename_view_onto_taken_name_returns_not_ok(tmp_path):
 
     assert result == {"ok": False}
     assert [v["name"] for v in a.load_workspace()["views"]] == ["A", "B"]
+
+
+def test_api_move_view_then_load_workspace_reflects_folder(tmp_path):
+    a = api_with_store(make_table(), tmp_path)
+    a.save_view("A", make_view_state().to_payload())
+
+    a.move_view("A", "QC subsets")
+
+    assert a.load_workspace()["views"][0]["folder"] == "QC subsets"
+
+
+def test_api_save_view_over_existing_name_preserves_its_folder(tmp_path):
+    # Updating a dirty view (the popover's "Update" button) re-saves it under
+    # the same name -- that must not silently pop it out of whatever folder
+    # it was filed in, only an explicit move_view call should do that.
+    a = api_with_store(make_table(), tmp_path)
+    a.save_view("A", make_view_state("data").to_payload())
+    a.move_view("A", "QC subsets")
+
+    a.save_view("A", make_view_state("row").to_payload())
+
+    assert a.load_workspace()["views"][0]["folder"] == "QC subsets"
+
+
+def test_api_delete_folder_clears_it_on_the_view(tmp_path):
+    a = api_with_store(make_table(), tmp_path)
+    a.save_view("A", make_view_state().to_payload())
+    a.move_view("A", "QC subsets")
+
+    a.delete_folder("QC subsets")
+
+    assert a.load_workspace()["views"][0]["folder"] is None
 
 
 def test_api_two_instances_same_table_id_share_a_workspace(tmp_path):

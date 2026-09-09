@@ -261,8 +261,8 @@ let rowFields=[], colFields=[];
 // to the same axis's rows in data mode. `field_summary`'s numeric/categorical
 // detection is reused for filter input type; see fieldIsNumeric().
 let axisState = {
-  observation: { sortField: null, sortDir: 0, filters: [], replacements: [], renames: {}, deletedFields: [] }, // sortDir: 0=off, 1=asc, -1=desc
-  sample: { sortField: null, sortDir: 0, filters: [], replacements: [], renames: {}, deletedFields: [] },
+  observation: { sortField: null, sortDir: 0, filters: [], replacements: [], renames: {}, deletedFields: [], columnSets: [] }, // sortDir: 0=off, 1=asc, -1=desc
+  sample: { sortField: null, sortDir: 0, filters: [], replacements: [], renames: {}, deletedFields: [], columnSets: [] },
 };
 // filters entries: {field, kind:'numeric', min, max} or {field, kind:'categorical', text}
 
@@ -342,6 +342,12 @@ function captureViewState(){
 function applyViewState(vs){
   setMode(vs.mode);
   axisState = JSON.parse(JSON.stringify(vs.axisState));
+  // Views/workspace state saved before columnSets existed won't have the
+  // key at all -- backfill it so every later st.columnSets.forEach/.length
+  // has an array to work with instead of throwing on undefined.
+  ['observation','sample'].forEach(axis=>{
+    if(!axisState[axis].columnSets) axisState[axis].columnSets = [];
+  });
   rowFields = vs.rowFields.slice();
   colFields = vs.colFields.slice();
   pinnedObs = new Set(vs.pinnedObs);
@@ -355,12 +361,24 @@ function applyViewState(vs){
 // captureViewState() snapshot doesn't -- trim to the comparable subset before
 // any JSON.stringify equality check, or every comparison would false-negative.
 function viewStatePayload(v){
-  return {mode: v.mode, axisState: v.axisState, rowFields: v.rowFields, colFields: v.colFields,
+  // Same columnSets backfill as applyViewState() -- otherwise a view saved
+  // before columnSets existed compares unequal to itself right after being
+  // applied, and falsely shows the unsaved-changes dot.
+  const axisState = JSON.parse(JSON.stringify(v.axisState));
+  ['observation','sample'].forEach(axis=>{
+    if(!axisState[axis].columnSets) axisState[axis].columnSets = [];
+  });
+  return {mode: v.mode, axisState, rowFields: v.rowFields, colFields: v.colFields,
     pinnedObs: [...v.pinnedObs].sort((a,b)=>a-b), pinnedColFields: [...v.pinnedColFields].sort()};
 }
 
+// mode (which tab -- Data/Observation/Sample metadata -- you're looking
+// through) is excluded: it's a lens on the same state, not a change to it,
+// so switching tabs alone shouldn't mark a view dirty.
 function viewStatesEqual(a, b){
-  return JSON.stringify(a) === JSON.stringify(b);
+  const {mode: am, ...ar} = a;
+  const {mode: bm, ...br} = b;
+  return JSON.stringify(ar) === JSON.stringify(br);
 }
 
 // ponytail: one shared timer, so a second toast replaces the first rather
@@ -1693,6 +1711,10 @@ function renderAxisChips(){
       chips.push(`<span class="chip">🗑 ${axisLabel(axis)}: <code>${escapeHtml(f)}</code> deleted` +
         `<button class="chip-x" data-kind="undelete" data-axis="${axis}" data-field="${escapeHtml(f)}" title="Restore field">✕</button></span>`);
     });
+    st.columnSets.forEach((cs, i)=>{
+      chips.push(`<span class="chip">🏷 ${axisLabel(axis)}: <code>${escapeHtml(cs.field)}</code>="${escapeHtml(cs.value)}" (${cs.ids.length})` +
+        `<button class="chip-x" data-kind="tag" data-axis="${axis}" data-i="${i}" title="Undo tag">✕</button></span>`);
+    });
   });
   if(chips.length>1){
     chips.push(`<button class="chip chip-clear-all" title="Clear everything above">Clear all ✕</button>`);
@@ -1704,6 +1726,7 @@ function renderAxisChips(){
   list.querySelectorAll('.chip-x').forEach(btn=>{
     const kind = btn.dataset.kind;
     if(kind==='sort') btn.onclick = ()=>removeSort(btn.dataset.axis);
+    else if(kind==='tag') btn.onclick = ()=>removeColumnSet(btn.dataset.axis, parseInt(btn.dataset.i));
     else if(kind==='replace') btn.onclick = ()=>removeReplacement(btn.dataset.axis, btn.dataset.field);
     else if(kind==='unrename') btn.onclick = ()=>unrenameField(btn.dataset.axis, btn.dataset.field);
     else if(kind==='undelete') btn.onclick = ()=>undeleteField(btn.dataset.axis, btn.dataset.field);
@@ -1754,15 +1777,15 @@ function updateViewsBtnLabel(){
 // whether the Views list's "All data" row is the one currently in effect.
 function isBaseState(){
   const empty = st => !st.sortField && !st.filters.length && !st.replacements.length
-    && !Object.keys(st.renames).length && !st.deletedFields.length;
+    && !Object.keys(st.renames).length && !st.deletedFields.length && !st.columnSets.length;
   return empty(axisState.observation) && empty(axisState.sample)
     && !pinnedObs.size && !pinnedColFields.size;
 }
 
 function clearAllChips(){
   recordHistory('clear all filters and sorts');
-  axisState.observation = { sortField: null, sortDir: 0, filters: [], replacements: [], renames: {}, deletedFields: [] };
-  axisState.sample = { sortField: null, sortDir: 0, filters: [], replacements: [], renames: {}, deletedFields: [] };
+  axisState.observation = { sortField: null, sortDir: 0, filters: [], replacements: [], renames: {}, deletedFields: [], columnSets: [] };
+  axisState.sample = { sortField: null, sortDir: 0, filters: [], replacements: [], renames: {}, deletedFields: [], columnSets: [] };
   pinnedObs.clear();
   pinnedColFields.clear();
   selPinnedRaw = null;
@@ -1792,10 +1815,16 @@ function buildAxisExportCode(axis){
   const renameEntries = Object.entries(st.renames);
   const hasSortOrFilter = st.filters.length || st.sortDir!==0;
   const hasFieldOps = st.replacements.length || renameEntries.length || st.deletedFields.length;
-  if(!hasSortOrFilter && !hasFieldOps) return null;
+  if(!hasSortOrFilter && !hasFieldOps && !st.columnSets.length) return null;
   const metaVar = axis==='observation' ? 'obs_meta' : 'samp_meta';
   const lines = [];
-  lines.push(`# --- ${axis} axis${st.replacements.length ? ': '+st.replacements.length+' replacement(s)' : ''}${renameEntries.length ? ', '+renameEntries.length+' rename(s)' : ''}${st.deletedFields.length ? ', '+st.deletedFields.length+' deleted field(s)' : ''}${st.filters.length ? ', '+st.filters.length+' filter(s)' : ''}${st.sortDir ? ', sorted by '+st.sortField : ''} ---`);
+  lines.push(`# --- ${axis} axis${st.replacements.length ? ': '+st.replacements.length+' replacement(s)' : ''}${renameEntries.length ? ', '+renameEntries.length+' rename(s)' : ''}${st.deletedFields.length ? ', '+st.deletedFields.length+' deleted field(s)' : ''}${st.columnSets.length ? ', '+st.columnSets.length+' tag(s)' : ''}${st.filters.length ? ', '+st.filters.length+' filter(s)' : ''}${st.sortDir ? ', sorted by '+st.sortField : ''} ---`);
+  st.columnSets.forEach(cs=>{
+    const md = {};
+    cs.ids.forEach(id=>{ md[id] = {[cs.field]: cs.value}; });
+    lines.push(`table.add_metadata(${JSON.stringify(md)}, axis='${axis}')`);
+  });
+  if(!hasSortOrFilter && !hasFieldOps) return lines;
   lines.push(`${metaVar} = table.metadata_to_dataframe('${axis}')`);
   st.replacements.forEach(r=>{
     const col = `${metaVar}[${pyRepr(r.field)}]`;
@@ -1850,7 +1879,7 @@ function buildExportCode(){
   const axesActive = ['observation','sample'].filter(a=>{
     const st = axisState[a];
     return st.filters.length || st.sortDir!==0 || st.replacements.length ||
-      Object.keys(st.renames).length || st.deletedFields.length;
+      Object.keys(st.renames).length || st.deletedFields.length || st.columnSets.length;
   });
   const lines = ['import biom'];
   if(axesActive.length) lines.push('import pandas as pd');
@@ -1892,6 +1921,7 @@ function buildExportSpec(){
       replacements: st.replacements,
       renames: st.renames,
       deletedFields: st.deletedFields,
+      columnSets: st.columnSets,
     };
   });
   return spec;
@@ -2054,29 +2084,105 @@ document.addEventListener('click', (e)=>{
   const pop = document.getElementById('filterPopover');
   if(pop && !pop.contains(e.target) && !e.target.closest('.ctx-item')) closeFilterPopover();
   const viewsPop = document.getElementById('viewsPopover');
-  if(viewsPop && !viewsPop.contains(e.target) && !e.target.closest('#viewsBtn')) closeViewsPopover();
+  // #ctxMenu lives outside #viewsPopover in the DOM (it's a floating menu
+  // positioned at the cursor, not a child of the panel) -- without this
+  // exclusion every click on a views-panel context-menu item reads as "click
+  // landed outside the panel" and closes the whole thing before the item's
+  // own handler gets a chance to act on it.
+  if(viewsPop && !viewsPop.contains(e.target) && !e.target.closest('#viewsBtn') && !e.target.closest('#ctxMenu')) closeViewsPopover();
 });
+
+// Pin state: hover opens/closes the panel on its own (see viewsBtn's
+// mouseenter/mouseleave below), a click latches it open past mouseleave.
+// Reset on every close so a later hover starts from plain hover behaviour
+// again rather than staying stuck pinned.
+let viewsPinned = false;
+let viewsHideTimer = null;
+// ponytail: a folder someone right-clicked "New folder" for but hasn't
+// dropped a view into yet only lives here, in memory, for this session --
+// SavedView.folder is the only place a folder is actually persisted, so an
+// empty one silently disappears on reload. Add a persisted Workspace.folders
+// list if that turns out to matter.
+let emptyFolders = [];
+
+function loadCollapsedFolders(){
+  try{ return new Set(JSON.parse(localStorage.getItem('bvCollapsedFolders') || '[]')); }
+  catch(e){ return new Set(); }
+}
+function saveCollapsedFolders(){
+  localStorage.setItem('bvCollapsedFolders', JSON.stringify([...collapsedFolders]));
+}
+let collapsedFolders = loadCollapsedFolders();
 
 function closeViewsPopover(){
   const existing = document.getElementById('viewsPopover');
   if(existing) existing.remove();
+  clearTimeout(viewsHideTimer);
+  viewsPinned = false;
   return !!existing;
+}
+
+// Independent per-axis count under a view's filters, same "how many survive"
+// logic as filterMatchCount/recomputeVisible but for a filter *list* rather
+// than a single filter -- lets a view row preview its resulting table size
+// before you commit to switching.
+function viewAxisCount(axis, filters){
+  const entries = axis==='observation' ? meta.row_metadata : meta.col_metadata;
+  const total = axis==='observation' ? meta.rows : meta.cols;
+  if(!filters.length) return total;
+  let count = 0;
+  for(let i=0;i<total;i++){
+    const entry = entries && entries[i];
+    if(filters.every(f=>filterMatches(f, entry ? entry[f.field] : null))) count++;
+  }
+  return count;
 }
 
 function viewRowHtml(view){
   const activeClass = lastAppliedViewName===view.name ? ' active' : '';
+  const rows = viewAxisCount('observation', view.axisState.observation.filters);
+  const cols = viewAxisCount('sample', view.axisState.sample.filters);
   return `<div class="views-row${activeClass}" data-name="${escapeHtml(view.name)}">` +
     `<span class="views-name">${escapeHtml(view.name)}</span>` +
-    `<button class="views-x" title="Delete">✕</button></div>`;
+    `<span class="views-base-hint">${rows.toLocaleString()} × ${cols.toLocaleString()}</span></div>`;
+}
+
+// Groups saved views by their `folder` tag -- one level, since a folder is
+// just that string sitting on a view (see SavedView.folder), not a real
+// container. Folder order is first-appearance in savedViews, with any
+// still-empty ones (emptyFolders) appended after.
+function groupedViewFolders(){
+  const order = [];
+  const byFolder = {};
+  savedViews.forEach(v=>{
+    if(!v.folder) return;
+    if(!byFolder[v.folder]){ byFolder[v.folder] = []; order.push(v.folder); }
+    byFolder[v.folder].push(v);
+  });
+  emptyFolders.forEach(f=>{
+    if(!byFolder[f]){ byFolder[f] = []; order.push(f); }
+  });
+  const ungrouped = savedViews.filter(v=>!v.folder);
+  return {order, byFolder, ungrouped};
+}
+
+function folderHtml(name, views){
+  const collapsedClass = collapsedFolders.has(name) ? ' collapsed' : '';
+  const body = views.length
+    ? views.map(viewRowHtml).join('')
+    : `<div class="views-empty">Right-click a view → Move to folder to add one</div>`;
+  return `<div class="views-folder${collapsedClass}" data-folder="${escapeHtml(name)}">` +
+    `<div class="views-folder-hd"><span class="vf-chev">▾</span><span class="vf-name">${escapeHtml(name)}</span>` +
+    `<span class="vf-count">${views.length}</span></div>` +
+    `<div class="views-folder-body">${body}</div></div>`;
 }
 
 function openViewsPopover(){
   closeFilterPopover();
-  closeViewsPopover();
-  // A pending "discard your filters?" is about a view switch that started
-  // here -- reopening this list means you went back on it, so the question
-  // is moot and should not be left hanging over the page.
-  closeConfirmPopover();
+  closeConfirmPopover(); // see closeViewsPopover's comment on why this stays
+  const existing = document.getElementById('viewsPopover');
+  if(existing) existing.remove();
+  clearTimeout(viewsHideTimer);
   const pop = document.createElement('div');
   pop.id = 'viewsPopover';
   const rect = viewsBtn.getBoundingClientRect();
@@ -2093,9 +2199,11 @@ function openViewsPopover(){
   const baseRow = `<div class="views-row views-row-base${baseActive}">` +
     `<span class="views-name">All data</span>` +
     `<span class="views-base-hint">no filters</span></div>`;
-  const rows = baseRow + (savedViews.length
-    ? savedViews.map(viewRowHtml).join('')
-    : `<div class="views-empty">No saved views yet</div>`);
+  const {order, byFolder, ungrouped} = groupedViewFolders();
+  const foldersHtml = order.map(name => folderHtml(name, byFolder[name])).join('');
+  const ungroupedHtml = ungrouped.map(viewRowHtml).join('');
+  const rows = baseRow + foldersHtml + ungroupedHtml +
+    (!savedViews.length && !order.length ? `<div class="views-empty">No saved views yet -- right-click for a folder</div>` : '');
   const activeView = lastAppliedViewName ? savedViews.find(v => v.name===lastAppliedViewName) : null;
   const dirty = !!activeView && !viewStatesEqual(captureViewState(), viewStatePayload(activeView));
   const updateBanner = dirty
@@ -2112,6 +2220,14 @@ function openViewsPopover(){
     `<button class="views-save-btn">Save</button></div>`;
   document.body.appendChild(pop);
   wireViewsPopover(pop);
+  // Same open-while-hovering-either-half behaviour as a native menu bar:
+  // the small gap between the button and the panel must not close it, so
+  // entering the panel cancels the button's pending hide, and leaving the
+  // panel re-arms it (unless a click has pinned the panel open).
+  pop.addEventListener('mouseenter', ()=> clearTimeout(viewsHideTimer));
+  pop.addEventListener('mouseleave', ()=>{
+    if(!viewsPinned) viewsHideTimer = setTimeout(closeViewsPopover, 200);
+  });
   if(dirty){
     pop.querySelector('.views-update-btn').onclick = ()=> saveCurrentAsView(lastAppliedViewName);
     pop.querySelector('.views-revert-btn').onclick = ()=> applyView(activeView, lastAppliedViewName);
@@ -2123,18 +2239,192 @@ function wireViewsPopover(pop){
     closeViewsPopover();
     lastAppliedViewName = null;
     clearAllChips();
+    lastLoadedViewState = captureViewState();
   });
   pop.querySelectorAll('.views-row:not(.views-row-base)').forEach(row=>{
     const name = row.dataset.name;
-    row.querySelector('.views-name').addEventListener('click', ()=> switchToView(name));
-    row.querySelector('.views-name').addEventListener('dblclick', (e)=>{ e.stopPropagation(); startRenameView(row, name); });
-    row.querySelector('.views-x').addEventListener('click', (e)=>{ e.stopPropagation(); deleteView(name); });
+    row.addEventListener('click', ()=> switchToView(name));
+    row.addEventListener('dblclick', (e)=>{ e.stopPropagation(); startRenameView(row, name); });
+  });
+  pop.querySelectorAll('.views-folder-hd').forEach(hd=>{
+    hd.addEventListener('click', ()=>{
+      const name = hd.closest('.views-folder').dataset.folder;
+      if(collapsedFolders.has(name)) collapsedFolders.delete(name); else collapsedFolders.add(name);
+      saveCollapsedFolders();
+      hd.closest('.views-folder').classList.toggle('collapsed');
+    });
   });
   const saveInput = pop.querySelector('.views-save-input');
   const saveBtn = pop.querySelector('.views-save-btn');
   const doSave = ()=> saveCurrentAsView(saveInput.value.trim());
   saveBtn.onclick = doSave;
   saveInput.addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.stopPropagation(); doSave(); } if(e.key==='Escape'){ e.stopPropagation(); closeViewsPopover(); } });
+}
+
+// Inline text-entry row appended into the open panel's list, used for both
+// "New folder" and (via the same helper) picking a folder name while moving
+// a view. Lives inside #viewsPopover rather than a floating menu so the
+// existing outside-click closer (which already special-cases
+// `viewsPop.contains(e.target)`) leaves it alone while typing -- #ctxMenu's
+// own click-anywhere-closes listener would otherwise kill it on the very
+// click that focuses it.
+function startNewFolderInput(onCommit){
+  const pop = document.getElementById('viewsPopover');
+  if(!pop) return;
+  const list = pop.querySelector('.views-list');
+  const row = document.createElement('div');
+  row.className = 'views-row';
+  row.innerHTML = `<input class="views-rename-input" type="text" placeholder="New folder name">`;
+  list.insertBefore(row, list.children[1] || null);
+  const input = row.querySelector('input');
+  input.focus();
+  let done = false;
+  const commit = ()=>{
+    if(done) return;
+    done = true;
+    const name = input.value.trim();
+    row.remove();
+    if(name) onCommit(name);
+  };
+  input.addEventListener('keydown', e=>{
+    if(e.key==='Enter'){ e.stopPropagation(); commit(); }
+    if(e.key==='Escape'){ e.stopPropagation(); done = true; row.remove(); }
+  });
+  input.addEventListener('blur', commit);
+}
+
+function startRenameFolder(hd, oldName){
+  hd.innerHTML = `<input class="views-rename-input" type="text" value="${escapeHtml(oldName)}">`;
+  const input = hd.querySelector('input');
+  input.focus();
+  input.select();
+  let committed = false;
+  const commit = async ()=>{
+    if(committed) return;
+    committed = true;
+    const newName = input.value.trim();
+    if(!newName || newName===oldName){ openViewsPopover(); return; }
+    await window.pywebview.api.rename_folder(oldName, newName);
+    emptyFolders = emptyFolders.map(f=> f===oldName ? newName : f);
+    if(collapsedFolders.has(oldName)){ collapsedFolders.delete(oldName); collapsedFolders.add(newName); saveCollapsedFolders(); }
+    await refreshSavedViews();
+    openViewsPopover();
+  };
+  input.addEventListener('keydown', e=>{
+    if(e.key==='Enter'){ e.stopPropagation(); commit(); }
+    if(e.key==='Escape'){ e.stopPropagation(); committed = true; openViewsPopover(); }
+  });
+  input.addEventListener('blur', commit);
+}
+
+async function moveViewToFolder(name, folder){
+  await window.pywebview.api.move_view(name, folder);
+  if(folder) emptyFolders = emptyFolders.filter(f=>f!==folder);
+  await refreshSavedViews();
+  openViewsPopover();
+}
+
+// Right-click menus for the views panel -- rename/move/delete on a view,
+// rename/delete on a folder, "New folder" on empty list space. All built
+// from the same #ctxMenu the grid's own right-click menu uses (see the
+// 'contextmenu' listener further down), just with a different item set.
+function openViewRowContextMenu(e, name){
+  const view = savedViews.find(v=>v.name===name);
+  if(!view) return;
+  const menu = document.createElement('div');
+  menu.id = 'ctxMenu';
+  menu.style.left = e.clientX + 'px';
+  menu.style.top = e.clientY + 'px';
+  menu.innerHTML =
+    `<button class="ctx-item" data-act="rename">✎ Rename</button>` +
+    `<button class="ctx-item" data-act="move">⌂ Move to folder…</button>` +
+    `<div class="ctx-sep"></div>` +
+    `<button class="ctx-item" data-act="delete">✕ Delete</button>`;
+  document.body.appendChild(menu);
+  // stopPropagation matters here (not just in openViewRowContextMenu's
+  // sibling functions): the button's own click keeps bubbling to document
+  // after this handler returns, straight into both the unconditional
+  // #ctxMenu closer and the views-panel outside-click closer -- by then
+  // closeContextMenu() has already detached this button from the DOM, so
+  // e.target.closest('#ctxMenu') in that second listener no longer matches
+  // and it tears down whatever this handler just built (a chained menu, an
+  // inline rename input) in the same tick it was created.
+  menu.querySelector('[data-act="rename"]').onclick = (ev)=>{
+    ev.stopPropagation();
+    closeContextMenu();
+    const row = document.querySelector(`#viewsPopover .views-row[data-name="${CSS.escape(name)}"]`);
+    if(row) startRenameView(row, name);
+  };
+  menu.querySelector('[data-act="move"]').onclick = (ev)=>{ ev.stopPropagation(); closeContextMenu(); openMoveToFolderMenu(e, view); };
+  menu.querySelector('[data-act="delete"]').onclick = (ev)=>{ ev.stopPropagation(); closeContextMenu(); deleteView(name); };
+}
+
+function openMoveToFolderMenu(e, view){
+  const {order} = groupedViewFolders();
+  const menu = document.createElement('div');
+  menu.id = 'ctxMenu';
+  menu.style.left = e.clientX + 'px';
+  menu.style.top = e.clientY + 'px';
+  const folderItems = order.map(name =>
+    `<button class="ctx-item" data-folder="${escapeHtml(name)}">${name===view.folder ? '✓ ' : ''}${escapeHtml(name)}</button>`
+  ).join('');
+  const noFolderItem = `<button class="ctx-item" data-folder="">${!view.folder ? '✓ ' : ''}— No folder —</button>`;
+  menu.innerHTML = folderItems + noFolderItem + `<div class="ctx-sep"></div>` +
+    `<button class="ctx-item" data-act="new">+ New folder…</button>`;
+  document.body.appendChild(menu);
+  menu.querySelectorAll('[data-folder]').forEach(btn=>{
+    btn.onclick = (ev)=>{ ev.stopPropagation(); closeContextMenu(); moveViewToFolder(view.name, btn.dataset.folder || null); };
+  });
+  menu.querySelector('[data-act="new"]').onclick = (ev)=>{
+    ev.stopPropagation();
+    closeContextMenu();
+    startNewFolderInput(name => moveViewToFolder(view.name, name));
+  };
+}
+
+function openFolderContextMenu(e, name){
+  const menu = document.createElement('div');
+  menu.id = 'ctxMenu';
+  menu.style.left = e.clientX + 'px';
+  menu.style.top = e.clientY + 'px';
+  menu.innerHTML =
+    `<button class="ctx-item" data-act="rename">✎ Rename folder</button>` +
+    `<div class="ctx-sep"></div>` +
+    `<button class="ctx-item" data-act="delete">✕ Delete folder</button>`;
+  document.body.appendChild(menu);
+  menu.querySelector('[data-act="rename"]').onclick = (ev)=>{
+    ev.stopPropagation();
+    closeContextMenu();
+    const hd = document.querySelector(`#viewsPopover .views-folder[data-folder="${CSS.escape(name)}"] .views-folder-hd`);
+    if(hd) startRenameFolder(hd, name);
+  };
+  menu.querySelector('[data-act="delete"]').onclick = async (ev)=>{
+    ev.stopPropagation();
+    closeContextMenu();
+    await window.pywebview.api.delete_folder(name);
+    emptyFolders = emptyFolders.filter(f=>f!==name);
+    collapsedFolders.delete(name);
+    saveCollapsedFolders();
+    await refreshSavedViews();
+    openViewsPopover();
+  };
+}
+
+function openEmptySpaceContextMenu(e){
+  const menu = document.createElement('div');
+  menu.id = 'ctxMenu';
+  menu.style.left = e.clientX + 'px';
+  menu.style.top = e.clientY + 'px';
+  menu.innerHTML = `<button class="ctx-item" data-act="new">+ New folder</button>`;
+  document.body.appendChild(menu);
+  menu.querySelector('[data-act="new"]').onclick = (ev)=>{
+    ev.stopPropagation();
+    closeContextMenu();
+    startNewFolderInput(name=>{
+      if(!emptyFolders.includes(name) && !savedViews.some(v=>v.folder===name)) emptyFolders.push(name);
+      openViewsPopover();
+    });
+  };
 }
 
 async function refreshSavedViews(){
@@ -2148,6 +2438,13 @@ async function saveCurrentAsView(name){
   await refreshSavedViews();
   lastAppliedViewName = name;
   closeViewsPopover();
+  // The popover closes the instant you save, so the row-level "active"
+  // highlight you'd otherwise see is gone before it renders. Flash the
+  // button itself so saving still reads as "applied", not a no-op.
+  updateViewsBtnLabel();
+  viewsBtn.classList.add('views-flash');
+  clearTimeout(saveCurrentAsView._t);
+  saveCurrentAsView._t = setTimeout(()=>viewsBtn.classList.remove('views-flash'), 700);
 }
 
 async function deleteView(name){
@@ -2194,7 +2491,12 @@ function applyView(view, name){
   // switched-to view's mode/pins in place. Same partial coverage undo
   // already has for a plain pin toggle, not a new gap.
   recordHistory(name ? 'switch to view ' + name : 'switch view');
+  // A saved view's mode is just whichever tab was active when it was saved,
+  // not a deliberate "this view opens on tab X" -- switching views shouldn't
+  // navigate you away from the tab you're currently on.
+  const currentMode = mode;
   applyViewState(view);
+  setMode(currentMode);
   lastAppliedViewName = name;
   lastLoadedViewState = captureViewState();
   closeViewsPopover();
@@ -2244,7 +2546,21 @@ async function switchToView(name){
 }
 
 const viewsBtn = document.getElementById('viewsBtn');
-viewsBtn.onclick = ()=> openViewsPopover();
+// Click latches the panel open (a second click closes it); hovering the
+// button opens it too, without latching, so a quick look doesn't require a
+// click-to-open/click-to-close round trip for the common case.
+viewsBtn.onclick = ()=>{
+  if(viewsPinned){ closeViewsPopover(); return; }
+  viewsPinned = true;
+  openViewsPopover();
+};
+viewsBtn.addEventListener('mouseenter', ()=>{
+  clearTimeout(viewsHideTimer);
+  if(!document.getElementById('viewsPopover')) openViewsPopover();
+});
+viewsBtn.addEventListener('mouseleave', ()=>{
+  if(!viewsPinned) viewsHideTimer = setTimeout(closeViewsPopover, 200);
+});
 
 
 function togglePin(rawIdx){
@@ -2284,6 +2600,20 @@ function closeContextMenu(){
 // for real <a> navigations, not window.open() -- see Api.open_url's comment
 // for why the actual browser launch goes through Python instead.
 document.addEventListener('contextmenu', (e)=>{
+  // Views panel right-clicks are a separate context from the grid's (a
+  // saved view's name, not a cell/header's content) -- handled entirely
+  // here rather than falling into the grid-oriented logic below.
+  if(e.target.closest('#viewsPopover')){
+    if(e.target.closest('.views-row-base')){ e.preventDefault(); return; } // "All data" has nothing to right-click for
+    const viewRow = e.target.closest('.views-row:not(.views-row-base)');
+    const folderHd = e.target.closest('.views-folder-hd');
+    e.preventDefault();
+    closeContextMenu();
+    if(viewRow) openViewRowContextMenu(e, viewRow.dataset.name);
+    else if(folderHd) openFolderContextMenu(e, folderHd.closest('.views-folder').dataset.folder);
+    else openEmptySpaceContextMenu(e);
+    return;
+  }
   // Right-click has to move the selection to what's under the cursor.
   // Without this the menu acts on one row while the highlight and the
   // readout bar still point at whatever was last left-clicked -- the UI
@@ -2516,6 +2846,77 @@ document.getElementById('replaceOverlay').addEventListener('click', (e)=>{
   if(e.target.id === 'replaceOverlay') e.currentTarget.classList.remove('open');
 });
 
+function currentVisIds(axis){
+  const vis = axis==='observation' ? visObs : visSample;
+  const rawIds = axis==='observation' ? meta.row_ids : meta.col_ids;
+  return vis ? vis.map(i=>rawIds[i]) : rawIds.slice();
+}
+
+function tagFieldOptions(axis){
+  document.getElementById('tgFieldList').innerHTML =
+    rpFieldsFor(axis).map(f=>`<option value="${escapeHtml(f)}">`).join('');
+}
+
+function updateTagCount(){
+  document.getElementById('tgCount').textContent = currentVisIds(document.getElementById('tgAxis').value).length;
+}
+
+function renderTagList(){
+  const items = [];
+  ['observation','sample'].forEach(axis=>{
+    axisState[axis].columnSets.forEach((cs, i)=>{
+      items.push(`<div class="rp-item"><span>${escapeHtml(axis)}: <code>${escapeHtml(cs.field)}</code> = "${escapeHtml(cs.value)}" (${cs.ids.length})</span>` +
+        `<button data-axis="${axis}" data-i="${i}">✕</button></div>`);
+    });
+  });
+  const el = document.getElementById('tgList');
+  el.innerHTML = items.join('');
+  el.querySelectorAll('button').forEach(btn=>{
+    btn.onclick = ()=> removeColumnSet(btn.dataset.axis, parseInt(btn.dataset.i));
+  });
+}
+
+function removeColumnSet(axis, i){
+  const cs = axisState[axis].columnSets[i];
+  recordHistory('remove tag on ' + (cs ? cs.field : axis));
+  axisState[axis].columnSets.splice(i, 1);
+  scheduleAutosave();
+  render();
+  renderAxisChips();
+  renderTagList();
+}
+
+function openTagModal(){
+  tagFieldOptions(document.getElementById('tgAxis').value);
+  updateTagCount();
+  renderTagList();
+  document.getElementById('tagOverlay').classList.add('open');
+  document.getElementById('tgField').focus();
+}
+document.getElementById('tgAxis').addEventListener('change', ()=>{
+  tagFieldOptions(document.getElementById('tgAxis').value);
+  updateTagCount();
+});
+document.getElementById('tgApply').onclick = ()=>{
+  const axis = document.getElementById('tgAxis').value;
+  const field = document.getElementById('tgField').value.trim();
+  const value = document.getElementById('tgValue').value;
+  if(!field) return;
+  const ids = currentVisIds(axis);
+  if(!ids.length) return;
+  recordHistory(`tag ${ids.length} ${axisLabel(axis).toLowerCase()} as ${field}=${value}`);
+  axisState[axis].columnSets.push({field, value, ids});
+  document.getElementById('tgValue').value = '';
+  scheduleAutosave();
+  render();
+  renderAxisChips();
+  renderTagList();
+};
+document.getElementById('tagClose').onclick = ()=>document.getElementById('tagOverlay').classList.remove('open');
+document.getElementById('tagOverlay').addEventListener('click', (e)=>{
+  if(e.target.id === 'tagOverlay') e.currentTarget.classList.remove('open');
+});
+
 // 'row' mode only swaps the column axis, 'col' mode only swaps the row axis —
 // so reset just the axis whose meaning changed and keep your place on the other.
 const rowAxisKey = m => m==='col' ? 'fields' : 'ids';
@@ -2694,7 +3095,7 @@ document.addEventListener('keydown', (e)=>{
     if(closeFilterPopover()) handled = true;
     if(closeViewsPopover()) handled = true;
     if(closeContextMenu()) handled = true;
-    ['codeOverlay','replaceOverlay','cellOverlay','valuesOverlay'].forEach(id=>{
+    ['codeOverlay','replaceOverlay','tagOverlay','cellOverlay','valuesOverlay'].forEach(id=>{
       const el = document.getElementById(id);
       if(el.classList.contains('open')){ el.classList.remove('open'); handled = true; }
     });

@@ -181,6 +181,7 @@ STYLE = """
   button.nav:active:not(:disabled),button.tool:active{transform:translateY(.5px)}
   button.nav:disabled{opacity:.35;cursor:default}
   #viewsBtn{max-width:380px;flex-shrink:0}
+  #viewsBtn.views-flash{background:var(--accent);border-color:var(--accent);color:#fff}
   .views-current-name{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
              max-width:340px;display:inline-block;vertical-align:bottom}
   .views-dirty-dot{color:var(--row-meta);font-size:8px;margin:0 1px;vertical-align:middle}
@@ -310,8 +311,21 @@ STYLE = """
      rather than pretending to be the first item in the saved list. */
   .views-row-base{border-bottom:1px solid var(--border);border-radius:5px 5px 0 0;margin-bottom:2px;padding-bottom:6px}
   .views-base-hint{color:var(--dim);font-size:10.5px;flex:none}
-  .views-x{background:none;border:none;color:var(--dim);cursor:pointer;font-size:10px;padding:0;line-height:1}
-  .views-x:hover{color:var(--danger)}
+  /* One-level folders: a group header (collapsible, right-click for
+     rename/delete) plus its member rows indented underneath. A folder is
+     just a label on a view (SavedView.folder) -- there is no separate
+     folder entity in the list, so an "empty" folder (no view carries its
+     name yet) only exists transiently in emptyFolders, see there. */
+  .views-folder{display:flex;flex-direction:column;gap:2px}
+  .views-folder-hd{display:flex;align-items:center;gap:5px;padding:4px 5px 4px 2px;border-radius:5px;cursor:pointer;
+             color:var(--dim);font-size:10.5px;font-weight:700;letter-spacing:.03em;text-transform:uppercase}
+  .views-folder-hd:hover{background:var(--hl-soft)}
+  .views-folder-hd .vf-chev{width:11px;text-align:center;font-size:9px;transition:transform var(--dur) var(--ease)}
+  .views-folder.collapsed .vf-chev{transform:rotate(-90deg)}
+  .views-folder-hd .vf-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .views-folder-hd .vf-count{font-family:ui-monospace,monospace;font-weight:400}
+  .views-folder-body{display:flex;flex-direction:column;gap:2px;padding-left:13px;border-left:1px solid var(--border);margin-left:8px}
+  .views-folder.collapsed .views-folder-body{display:none}
   .views-save{display:flex;gap:4px;border-top:1px solid var(--border);padding-top:6px}
   .views-save-input,.views-rename-input{flex:1;box-sizing:border-box;background:var(--input-bg);color:var(--fg);
     border:1px solid var(--input-border);border-radius:5px;padding:3px 6px;font-size:12px}
@@ -428,27 +442,29 @@ STYLE = """
   body.mode-row .rh,body.mode-data .rh{box-shadow:inset 3px 0 0 var(--row-meta)}
   body.mode-col .hdr.colhdr,body.mode-data .hdr.colhdr{background:var(--col-meta-bg);color:var(--col-meta);font-weight:700}
   body.mode-col .hdr.colhdr,body.mode-data .hdr.colhdr{box-shadow:inset 0 -3px 0 var(--col-meta)}
-  #replaceModal{width:420px;border-radius:var(--radius-lg)}
-  #replaceModal header{justify-content:space-between}
-  #replaceModal header h3{margin-right:0}
-  #replaceModal .rp-form{padding:12px 14px;display:flex;flex-wrap:wrap;gap:6px}
-  #replaceModal .rp-form select, #replaceModal .rp-form input{background:var(--input-bg);color:var(--fg);
+  #replaceModal, #tagModal{width:420px;border-radius:var(--radius-lg)}
+  #replaceModal header, #tagModal header{justify-content:space-between}
+  #replaceModal header h3, #tagModal header h3{margin-right:0}
+  #replaceModal .rp-form, #tagModal .rp-form{padding:12px 14px;display:flex;flex-wrap:wrap;gap:6px}
+  #replaceModal .rp-form select, #replaceModal .rp-form input,
+  #tagModal .rp-form select, #tagModal .rp-form input{background:var(--input-bg);color:var(--fg);
              border:1px solid var(--input-border);border-radius:4px;padding:4px 6px;font-size:12.5px}
-  #replaceModal .rp-form select{flex:1 1 100%}
+  #replaceModal .rp-form select, #tagModal .rp-form select{flex:1 1 100%}
   .rp-label{flex:1 1 100%;font-size:11px;color:var(--dim);margin-bottom:-3px}
+  .rp-hint{flex:1 1 100%;font-size:11px;color:var(--dim);margin:2px 0 0;padding:0 14px 10px}
   /* Bottom-right and accent-filled: it is the only action in the dialog
      that changes anything, and it was sitting bottom-left looking exactly
      like the toolbar buttons that don't. */
-  #replaceModal .rp-form #rpApply{margin-left:auto;background:var(--accent);color:var(--bg);
+  #replaceModal .rp-form #rpApply, #tagModal .rp-form #tgApply{margin-left:auto;background:var(--accent);color:var(--bg);
              border-color:var(--accent);font-weight:600}
-  #replaceModal .rp-form #rpApply:hover{filter:brightness(1.08);background:var(--accent)}
-  #replaceModal .rp-form input{flex:1 1 45%;min-width:0}
-  #replaceModal .rp-form button{flex:0 0 auto}
-  #rpList{padding:0 14px 14px;display:flex;flex-direction:column;gap:4px;max-height:30vh;overflow-y:auto}
-  #rpList .rp-item{display:flex;align-items:center;justify-content:space-between;gap:8px;
+  #replaceModal .rp-form #rpApply:hover, #tagModal .rp-form #tgApply:hover{filter:brightness(1.08);background:var(--accent)}
+  #replaceModal .rp-form input, #tagModal .rp-form input{flex:1 1 45%;min-width:0}
+  #replaceModal .rp-form button, #tagModal .rp-form button{flex:0 0 auto}
+  #rpList, #tgList{padding:0 14px 14px;display:flex;flex-direction:column;gap:4px;max-height:30vh;overflow-y:auto}
+  #rpList .rp-item, #tgList .rp-item{display:flex;align-items:center;justify-content:space-between;gap:8px;
              background:var(--hl);border-radius:6px;padding:4px 8px;font-size:12px}
-  #rpList .rp-item button{background:none;border:none;color:var(--dim);cursor:pointer;font-size:12px}
-  #rpList .rp-item button:hover{color:var(--fg)}
+  #rpList .rp-item button, #tgList .rp-item button{background:none;border:none;color:var(--dim);cursor:pointer;font-size:12px}
+  #rpList .rp-item button:hover, #tgList .rp-item button:hover{color:var(--fg)}
   .wm-overlay{position:fixed;inset:0;background:rgba(0,0,0,.4);backdrop-filter:blur(6px);display:none;
                align-items:center;justify-content:center;z-index:10}
   .wm-overlay.open{display:flex}

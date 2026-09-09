@@ -38,6 +38,9 @@ if(!window.pywebview){
     save_view: (name, state) => post('/api/save_view', {name, state}),
     delete_view: (name) => post('/api/delete_view', {name}),
     rename_view: (old_name, new_name) => post('/api/rename_view', {old_name, new_name}),
+    move_view: (name, folder) => post('/api/move_view', {name, folder}),
+    rename_folder: (old_name, new_name) => post('/api/rename_folder', {old_name, new_name}),
+    delete_folder: (name) => post('/api/delete_folder', {name}),
   }};
   window.dispatchEvent(new Event('pywebviewready'));
 }
@@ -58,6 +61,9 @@ API = {
     "/api/save_view": lambda body: API_INSTANCE.save_view(body["name"], body["state"]) or {"ok": True},
     "/api/delete_view": lambda body: API_INSTANCE.delete_view(body["name"]) or {"ok": True},
     "/api/rename_view": lambda body: API_INSTANCE.rename_view(body["old_name"], body["new_name"]),
+    "/api/move_view": lambda body: API_INSTANCE.move_view(body["name"], body.get("folder")) or {"ok": True},
+    "/api/rename_folder": lambda body: API_INSTANCE.rename_folder(body["old_name"], body["new_name"]) or {"ok": True},
+    "/api/delete_folder": lambda body: API_INSTANCE.delete_folder(body["name"]) or {"ok": True},
 }
 
 
