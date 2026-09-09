@@ -115,3 +115,26 @@ def test_delete_view_removes_it(_api):
     result = mcp_server.delete_view("temp")
     assert result == {"ok": True}
     assert not any(v["name"] == "temp" for v in mcp_server.list_views())
+
+
+def test_list_views_reports_folder_as_null_when_ungrouped(_api):
+    mcp_server.create_view(name="A")
+    assert mcp_server.list_views() == [{"name": "A", "saved_at": mcp_server.list_views()[0]["saved_at"], "folder": None}]
+
+
+def test_move_view_files_it_into_a_folder():
+    # A folder isn't a separate object -- filing the first view into a new
+    # name is what creates it (see move_view's docstring).
+    mcp_server.create_view(name="A")
+    result = mcp_server.move_view("A", "QC subsets")
+    assert result == {"ok": True}
+    view = next(v for v in mcp_server.list_views() if v["name"] == "A")
+    assert view["folder"] == "QC subsets"
+
+
+def test_move_view_out_of_a_folder():
+    mcp_server.create_view(name="A")
+    mcp_server.move_view("A", "QC subsets")
+    mcp_server.move_view("A", None)
+    view = next(v for v in mcp_server.list_views() if v["name"] == "A")
+    assert view["folder"] is None

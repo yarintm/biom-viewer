@@ -17,8 +17,9 @@ mcp = MCPServer("biom-viewer")
 
 # Set by main() at process start. A headless Api bound to one table/file —
 # ok that Api.window stays None here, since none of the methods this module
-# calls (meta, field_summary, save_view, load_workspace, delete_view) touch
-# window; only export_table/open_url do, and this server doesn't expose those.
+# calls (meta, field_summary, save_view, load_workspace, delete_view,
+# move_view) touch window; only export_table/open_url do, and this server
+# doesn't expose those.
 _api: Api | None = None
 
 
@@ -106,14 +107,26 @@ def create_views(specs: list[dict]) -> list[dict]:
 
 
 def list_views() -> list[dict]:
-    """Name and save timestamp of every saved view."""
+    """Name, save timestamp, and folder (null if ungrouped) of every saved view."""
     workspace = _get_api().load_workspace()
-    return [{"name": v["name"], "saved_at": v["savedAt"]} for v in workspace["views"]]
+    return [{"name": v["name"], "saved_at": v["savedAt"], "folder": v.get("folder")} for v in workspace["views"]]
 
 
 def delete_view(name: str) -> dict:
     """Delete a saved view by name."""
     _get_api().delete_view(name)
+    return {"ok": True}
+
+
+def move_view(name: str, folder: str | None = None) -> dict:
+    """File a saved view into a folder, or take it out.
+
+    A folder isn't a separate object — it's just a label on a view — so
+    filing the first view into a new folder name creates that folder, and
+    `folder=None` moves the view back out to the ungrouped top level. Folder
+    names group by exact string match across views (case-sensitive).
+    """
+    _get_api().move_view(name, folder)
     return {"ok": True}
 
 
@@ -123,6 +136,7 @@ mcp.tool()(create_view)
 mcp.tool()(create_views)
 mcp.tool()(list_views)
 mcp.tool()(delete_view)
+mcp.tool()(move_view)
 
 
 def main() -> None:
