@@ -46,8 +46,61 @@ def field_summary(axis: str, field: str) -> dict:
     return _get_api().field_summary(axis, field)
 
 
+def _axis_state(filters: list[dict] | None, sort: dict | None) -> dict:
+    return {
+        "sortField": sort["field"] if sort else None,
+        "sortDir": sort["dir"] if sort else 0,
+        "filters": filters or [],
+        "replacements": [],
+        "renames": {},
+        "deletedFields": [],
+        "columnSets": [],
+    }
+
+
+def create_view(
+    name: str,
+    mode: str = "data",
+    row_fields: list[str] | None = None,
+    col_fields: list[str] | None = None,
+    observation_filters: list[dict] | None = None,
+    sample_filters: list[dict] | None = None,
+    observation_sort: dict | None = None,
+    sample_sort: dict | None = None,
+    pinned_observation_ids: list[int] | None = None,
+    pinned_column_fields: list[str] | None = None,
+) -> dict:
+    """Build and save one named view. Overwrites any existing view with the
+    same name.
+
+    mode: 'data' | 'row' (observation-metadata mode) | 'col' (sample-metadata mode).
+    *_filters: list of
+      {"field": str, "kind": "numeric", "min": float, "max": float} or
+      {"field": str, "kind": "categorical", "text": str}
+    observation_sort / sample_sort: {"field": str, "dir": 1 or -1} or None.
+    pinned_observation_ids: raw observation row indices to freeze on screen
+      (get these from meta()'s row_ids order, index 0-based).
+    pinned_column_fields: metadata field names to freeze in col-metadata mode,
+      e.g. ["diagnosis"].
+    """
+    payload = {
+        "mode": mode,
+        "axisState": {
+            "observation": _axis_state(observation_filters, observation_sort),
+            "sample": _axis_state(sample_filters, sample_sort),
+        },
+        "rowFields": row_fields or [],
+        "colFields": col_fields or [],
+        "pinnedObs": pinned_observation_ids or [],
+        "pinnedColFields": pinned_column_fields or [],
+    }
+    _get_api().save_view(name, payload)
+    return payload
+
+
 mcp.tool()(list_fields)
 mcp.tool()(field_summary)
+mcp.tool()(create_view)
 
 
 def main() -> None:

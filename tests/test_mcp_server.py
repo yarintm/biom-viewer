@@ -60,3 +60,36 @@ def test_field_summary_numeric():
     summary = mcp_server.field_summary("sample", "age")
     assert summary["missing"] == 0
     assert summary["n"] if "n" in summary else True  # numeric summary shape from _numeric_summary
+
+
+def test_create_view_round_trips_through_workspace(_api):
+    result = mcp_server.create_view(
+        name="IBD samples",
+        mode="data",
+        col_fields=["diagnosis"],
+        sample_filters=[{"field": "diagnosis", "kind": "categorical", "text": "IBD"}],
+        sample_sort={"field": "age", "dir": -1},
+        pinned_observation_ids=[0],
+        pinned_column_fields=["diagnosis"],
+    )
+    assert result["mode"] == "data"
+    assert result["pinnedObs"] == [0]
+    assert result["pinnedColFields"] == ["diagnosis"]
+
+    workspace = _api.load_workspace()
+    saved = next(v for v in workspace["views"] if v["name"] == "IBD samples")
+    assert saved["axisState"]["sample"]["filters"] == [
+        {"field": "diagnosis", "kind": "categorical", "text": "IBD"}
+    ]
+    assert saved["axisState"]["sample"]["sortField"] == "age"
+    assert saved["axisState"]["sample"]["sortDir"] == -1
+    assert saved["axisState"]["observation"]["filters"] == []
+
+
+def test_create_view_defaults_produce_empty_but_valid_state(_api):
+    result = mcp_server.create_view(name="empty view")
+    assert result["rowFields"] == []
+    assert result["colFields"] == []
+    assert result["pinnedObs"] == []
+    assert result["pinnedColFields"] == []
+    assert result["axisState"]["observation"]["sortDir"] == 0
