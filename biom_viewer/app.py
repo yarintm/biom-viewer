@@ -649,6 +649,15 @@ PAGE = """<!doctype html>
 {STYLE}
 </style></head>
 <body class="mode-data">
+<!-- Permanently docked at the window edge, independent of the top toolbar --
+     hovering slides the Views panel out over the grid (see openViewsPopover),
+     a click pins it open. Its own rail rather than a toolbar button because
+     it needs to stay reachable and visually separate from the mode/search
+     controls above, the way a saved-views list is a different kind of thing
+     than either. -->
+<div id="viewsRail">
+  <button id="viewsBtn" title="Saved views">☰</button>
+</div>
 <div id="info">
   <span style="display:flex;align-items:center;overflow:hidden">
     <span id="filename">loading…</span>
@@ -669,7 +678,6 @@ PAGE = """<!doctype html>
   </span>
 </div>
 <div id="axisChips">
-  <button class="tool" id="viewsBtn" title="Saved views">Views ▾</button>
   <div id="axisChipsList"></div>
 </div>
 <div id="selectedWrap">

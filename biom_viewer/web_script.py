@@ -1754,18 +1754,19 @@ function renderAxisChips(){
 // app (sort/filter/pin/rename/undo/view-switch/etc), so piggybacking here
 // is the one hook point that reliably keeps the label current without
 // scattering calls across every mutator.
+// The rail icon is a fixed 24px square -- no room to typeset a view name on
+// it the way the old toolbar button did, so "which view is this" moves
+// entirely into the tooltip and a dirty dot; the panel itself (which does
+// have room) is still where the active row highlight lives.
 function updateViewsBtnLabel(){
   const btn = document.getElementById('viewsBtn');
   if(!lastAppliedViewName){
-    btn.textContent = 'Views ▾';
     btn.title = 'Saved views';
     btn.classList.remove('views-dirty');
     return;
   }
   const view = savedViews.find(v => v.name===lastAppliedViewName);
   const dirty = !view || !viewStatesEqual(captureViewState(), viewStatePayload(view));
-  btn.innerHTML = `<span class="views-current-name">${escapeHtml(lastAppliedViewName)}</span>` +
-    (dirty ? `<span class="views-dirty-dot" title="Unsaved changes -- open Views to update">●</span>` : '') + ` ▾`;
   btn.title = dirty ? `${lastAppliedViewName} (unsaved changes -- open Views to update)` : lastAppliedViewName;
   btn.classList.toggle('views-dirty', dirty);
 }
@@ -2119,6 +2120,7 @@ function closeViewsPopover(){
   if(existing) existing.remove();
   clearTimeout(viewsHideTimer);
   viewsPinned = false;
+  viewsBtn.classList.remove('views-open');
   return !!existing;
 }
 
@@ -2184,10 +2186,7 @@ function openViewsPopover(){
   if(existing) existing.remove();
   clearTimeout(viewsHideTimer);
   const pop = document.createElement('div');
-  pop.id = 'viewsPopover';
-  const rect = viewsBtn.getBoundingClientRect();
-  pop.style.left = rect.left + 'px';
-  pop.style.top = (rect.bottom + 4) + 'px';
+  pop.id = 'viewsPopover'; // positioned entirely by CSS -- docked to #viewsRail, full window height
   // "No view" has to be selectable, not just an implicit state you fall
   // into: without it the list is a one-way door -- you can enter a view but
   // there's no listed way back to the unfiltered table, and the only escape
@@ -2215,10 +2214,12 @@ function openViewsPopover(){
         `</div>` +
       `</div>`
     : '';
-  pop.innerHTML = updateBanner + `<div class="views-list">${rows}</div>` +
+  pop.innerHTML = `<div class="views-panel-hd">Views</div>` + updateBanner +
+    `<div class="views-list">${rows}</div>` +
     `<div class="views-save"><input class="views-save-input" type="text" placeholder="Save current as…">` +
     `<button class="views-save-btn">Save</button></div>`;
   document.body.appendChild(pop);
+  viewsBtn.classList.add('views-open');
   wireViewsPopover(pop);
   // Same open-while-hovering-either-half behaviour as a native menu bar:
   // the small gap between the button and the panel must not close it, so
