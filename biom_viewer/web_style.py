@@ -79,6 +79,10 @@ STYLE = """
   #viewsBtn:hover{background:var(--hl-soft);color:var(--fg)}
   #viewsBtn.views-open{background:var(--hl);color:var(--accent)}
   #viewsBtn.views-flash{background:var(--accent);color:#fff}
+  /* The icon has no room to typeset a name (see updateViewsBtnLabel), so
+     "a view is applied" needs its own always-visible signal distinct from
+     the dirty-dot -- otherwise that fact only exists in the hover tooltip. */
+  #viewsBtn.views-has-active{box-shadow:inset 0 -2px 0 var(--accent)}
   button,input,select{font-family:inherit}
   button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--sel-outline);outline-offset:1px}
   #info{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 14px;
@@ -319,24 +323,52 @@ STYLE = """
   .views-panel-hd{font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--dim);padding:2px 2px 2px}
   .views-list{flex:1;display:flex;flex-direction:column;gap:2px;overflow-y:auto;min-height:0}
   .views-empty{color:var(--dim);font-size:12px;padding:4px 6px}
-  .views-row{display:flex;align-items:center;gap:6px;padding:4px 6px;border-radius:5px;cursor:pointer;transition:background var(--dur) var(--ease)}
-  .views-row:hover{background:var(--hl)}
-  .views-row.active{background:var(--hl);font-weight:700}
+  /* Each row is a flex wrapper around two real <button>s (views-row-main to
+     switch/rename, views-row-menu for the same Rename/Move/Delete menu
+     right-click opens) rather than one clickable <div> -- a <div> with only
+     a click handler has no Tab stop and no Enter/Space activation, which
+     made switching views, and reaching actions gated entirely behind
+     right-click, unreachable without a mouse. Can't be one nested button:
+     a <button> can't contain another interactive control. */
+  .views-row{display:flex;align-items:center;border-radius:5px;transition:background var(--dur) var(--ease)}
+  .views-row:hover,.views-row:focus-within{background:var(--hl)}
+  .views-row.active{background:var(--hl)}
+  .views-row-main{flex:1;min-width:0;display:flex;align-items:center;gap:6px;padding:4px 6px;
+             background:none;border:none;color:inherit;text-align:left;cursor:pointer;border-radius:5px;font-size:12px}
+  .views-row.active .views-row-main{font-weight:700}
+  .views-row-menu{flex:none;background:none;border:none;color:var(--dim);cursor:pointer;font-size:12px;line-height:1;
+             padding:4px 7px;margin-right:2px;border-radius:4px;opacity:0;
+             transition:opacity var(--dur) var(--ease),background var(--dur) var(--ease),color var(--dur) var(--ease)}
+  .views-row:hover .views-row-menu,.views-row-menu:focus-visible{opacity:1}
+  .views-row-menu:hover{background:var(--border);color:var(--fg)}
   .views-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}
-  /* The base state isn't a saved view -- it can't be renamed or deleted and
-     it's always present -- so it sits above a rule as a separate group
+  /* The base state isn't a saved view -- it can't be renamed, moved, or
+     deleted and it's always present -- so it's the one row that stays a
+     single button (no "⋯"), sitting above a rule as a separate group
      rather than pretending to be the first item in the saved list. */
-  .views-row-base{border-bottom:1px solid var(--border);border-radius:5px 5px 0 0;margin-bottom:2px;padding-bottom:6px}
-  .views-base-hint{color:var(--dim);font-size:10.5px;flex:none}
+  .views-row-base{width:100%;display:flex;align-items:center;gap:6px;padding:4px 6px;
+             background:none;border:none;color:inherit;text-align:left;cursor:pointer;
+             border-bottom:1px solid var(--border);border-radius:5px 5px 0 0;margin-bottom:2px;padding-bottom:6px}
+  .views-row-base.active{font-weight:700}
+  /* --hdr-fg, not --dim -- --dim on the active row's --hl background measures
+     3.6:1 in dark mode, under the 4.5:1 minimum for text this size. */
+  .views-base-hint{color:var(--hdr-fg);font-size:10.5px;flex:none}
   /* One-level folders: a group header (collapsible, right-click for
      rename/delete) plus its member rows indented underneath. A folder is
      just a label on a view (SavedView.folder) -- there is no separate
      folder entity in the list, so an "empty" folder (no view carries its
      name yet) only exists transiently in emptyFolders, see there. */
   .views-folder{display:flex;flex-direction:column;gap:2px}
-  .views-folder-hd{display:flex;align-items:center;gap:5px;padding:4px 5px 4px 2px;border-radius:5px;cursor:pointer;
+  .views-folder-hd{display:flex;align-items:center;border-radius:5px}
+  .views-folder-hd:hover,.views-folder-hd:focus-within{background:var(--hl-soft)}
+  .views-folder-toggle{flex:1;min-width:0;display:flex;align-items:center;gap:5px;padding:4px 5px 4px 2px;
+             background:none;border:none;text-align:left;cursor:pointer;border-radius:5px;
              color:var(--dim);font-size:10.5px;font-weight:700;letter-spacing:.03em;text-transform:uppercase}
-  .views-folder-hd:hover{background:var(--hl-soft)}
+  .views-folder-menu{flex:none;background:none;border:none;color:var(--dim);cursor:pointer;font-size:11px;line-height:1;
+             padding:3px 6px;margin-right:2px;border-radius:4px;opacity:0;
+             transition:opacity var(--dur) var(--ease),background var(--dur) var(--ease),color var(--dur) var(--ease)}
+  .views-folder-hd:hover .views-folder-menu,.views-folder-menu:focus-visible{opacity:1}
+  .views-folder-menu:hover{background:var(--border);color:var(--fg)}
   .views-folder-hd .vf-chev{width:11px;text-align:center;font-size:9px;transition:transform var(--dur) var(--ease)}
   .views-folder.collapsed .vf-chev{transform:rotate(-90deg)}
   .views-folder-hd .vf-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

@@ -1762,13 +1762,17 @@ function updateViewsBtnLabel(){
   const btn = document.getElementById('viewsBtn');
   if(!lastAppliedViewName){
     btn.title = 'Saved views';
-    btn.classList.remove('views-dirty');
+    btn.classList.remove('views-dirty', 'views-has-active');
     return;
   }
   const view = savedViews.find(v => v.name===lastAppliedViewName);
   const dirty = !view || !viewStatesEqual(captureViewState(), viewStatePayload(view));
   btn.title = dirty ? `${lastAppliedViewName} (unsaved changes -- open Views to update)` : lastAppliedViewName;
   btn.classList.toggle('views-dirty', dirty);
+  // The icon alone can't typeset a name, so "some named view is applied"
+  // still needs a signal of its own -- a thin accent underline, distinct
+  // from the dirty-dot -- rather than only showing up in the tooltip.
+  btn.classList.add('views-has-active');
 }
 
 // One undo step for the whole chips row -- individual chip removers each
@@ -2117,7 +2121,15 @@ let collapsedFolders = loadCollapsedFolders();
 
 function closeViewsPopover(){
   const existing = document.getElementById('viewsPopover');
-  if(existing) existing.remove();
+  if(existing){
+    // Rows/folder-menu buttons are keyboard-focusable now (see viewRowHtml),
+    // so closing the panel while focus is on one of them must not just drop
+    // focus onto <body> -- send it back to the control that opened the
+    // panel, same as any other menu/disclosure widget.
+    const hadFocus = existing.contains(document.activeElement);
+    existing.remove();
+    if(hadFocus) viewsBtn.focus();
+  }
   clearTimeout(viewsHideTimer);
   viewsPinned = false;
   viewsBtn.classList.remove('views-open');
@@ -2140,13 +2152,24 @@ function viewAxisCount(axis, filters){
   return count;
 }
 
+// Two real <button>s, not a clickable <div> -- a <div> with only a click
+// handler has no keyboard path at all (no Tab stop, no Enter/Space
+// activation), which made switching views and reaching Rename/Move/Delete
+// (right-click-only) unreachable without a mouse. <button> gets Tab focus,
+// Enter/Space activation, and the app's existing focus-visible ring for
+// free; the pair can't be one nested button since a <button> can't contain
+// another interactive control.
 function viewRowHtml(view){
   const activeClass = lastAppliedViewName===view.name ? ' active' : '';
   const rows = viewAxisCount('observation', view.axisState.observation.filters);
   const cols = viewAxisCount('sample', view.axisState.sample.filters);
   return `<div class="views-row${activeClass}" data-name="${escapeHtml(view.name)}">` +
-    `<span class="views-name">${escapeHtml(view.name)}</span>` +
-    `<span class="views-base-hint">${rows.toLocaleString()} × ${cols.toLocaleString()}</span></div>`;
+    `<button class="views-row-main">` +
+      `<span class="views-name">${escapeHtml(view.name)}</span>` +
+      `<span class="views-base-hint">${rows.toLocaleString()} × ${cols.toLocaleString()}</span>` +
+    `</button>` +
+    `<button class="views-row-menu" aria-label="More actions for ${escapeHtml(view.name)}" title="Rename, move, or delete">⋯</button>` +
+    `</div>`;
 }
 
 // Groups saved views by their `folder` tag -- one level, since a folder is
@@ -2174,8 +2197,12 @@ function folderHtml(name, views){
     ? views.map(viewRowHtml).join('')
     : `<div class="views-empty">Right-click a view → Move to folder to add one</div>`;
   return `<div class="views-folder${collapsedClass}" data-folder="${escapeHtml(name)}">` +
-    `<div class="views-folder-hd"><span class="vf-chev">▾</span><span class="vf-name">${escapeHtml(name)}</span>` +
-    `<span class="vf-count">${views.length}</span></div>` +
+    `<div class="views-folder-hd">` +
+      `<button class="views-folder-toggle" aria-label="${escapeHtml(name)} folder, ${views.length} view${views.length===1?'':'s'}, ${collapsedFolders.has(name)?'collapsed':'expanded'}">` +
+        `<span class="vf-chev">▾</span><span class="vf-name">${escapeHtml(name)}</span><span class="vf-count">${views.length}</span>` +
+      `</button>` +
+      `<button class="views-folder-menu" aria-label="Actions for folder ${escapeHtml(name)}" title="Rename or delete folder">⋯</button>` +
+    `</div>` +
     `<div class="views-folder-body">${body}</div></div>`;
 }
 
@@ -2195,9 +2222,11 @@ function openViewsPopover(){
   // whole thing becomes an honest single-select of "which state am I in",
   // base state included.
   const baseActive = (!lastAppliedViewName && isBaseState()) ? ' active' : '';
-  const baseRow = `<div class="views-row views-row-base${baseActive}">` +
+  // No "⋯" here -- "All data" isn't a saved view, there's nothing to
+  // rename/move/delete, so it's the one row that can stay a single button.
+  const baseRow = `<button class="views-row views-row-base${baseActive}">` +
     `<span class="views-name">All data</span>` +
-    `<span class="views-base-hint">no filters</span></div>`;
+    `<span class="views-base-hint">no filters</span></button>`;
   const {order, byFolder, ungrouped} = groupedViewFolders();
   const foldersHtml = order.map(name => folderHtml(name, byFolder[name])).join('');
   const ungroupedHtml = ungrouped.map(viewRowHtml).join('');
@@ -2235,6 +2264,15 @@ function openViewsPopover(){
   }
 }
 
+// A button's own bounding rect stands in for a MouseEvent's clientX/clientY
+// when a context menu is opened by click or keyboard rather than by an
+// actual right-click -- openViewRowContextMenu/openFolderContextMenu only
+// ever read those two fields off the "event" they're given.
+function rectAsEvent(el){
+  const r = el.getBoundingClientRect();
+  return {clientX: r.left, clientY: r.bottom + 2};
+}
+
 function wireViewsPopover(pop){
   pop.querySelector('.views-row-base').addEventListener('click', ()=>{
     closeViewsPopover();
@@ -2244,15 +2282,25 @@ function wireViewsPopover(pop){
   });
   pop.querySelectorAll('.views-row:not(.views-row-base)').forEach(row=>{
     const name = row.dataset.name;
-    row.addEventListener('click', ()=> switchToView(name));
-    row.addEventListener('dblclick', (e)=>{ e.stopPropagation(); startRenameView(row, name); });
+    const main = row.querySelector('.views-row-main');
+    main.addEventListener('click', ()=> switchToView(name));
+    main.addEventListener('dblclick', (e)=>{ e.stopPropagation(); startRenameView(row, name); });
+    row.querySelector('.views-row-menu').addEventListener('click', (e)=>{
+      e.stopPropagation(); // see openViewRowContextMenu's own stopPropagation comment -- same self-destruction risk
+      openViewRowContextMenu(rectAsEvent(e.currentTarget), name);
+    });
   });
   pop.querySelectorAll('.views-folder-hd').forEach(hd=>{
-    hd.addEventListener('click', ()=>{
-      const name = hd.closest('.views-folder').dataset.folder;
+    const folder = hd.closest('.views-folder');
+    hd.querySelector('.views-folder-toggle').addEventListener('click', ()=>{
+      const name = folder.dataset.folder;
       if(collapsedFolders.has(name)) collapsedFolders.delete(name); else collapsedFolders.add(name);
       saveCollapsedFolders();
-      hd.closest('.views-folder').classList.toggle('collapsed');
+      folder.classList.toggle('collapsed');
+    });
+    hd.querySelector('.views-folder-menu').addEventListener('click', (e)=>{
+      e.stopPropagation();
+      openFolderContextMenu(rectAsEvent(e.currentTarget), folder.dataset.folder);
     });
   });
   const saveInput = pop.querySelector('.views-save-input');
@@ -2550,10 +2598,21 @@ const viewsBtn = document.getElementById('viewsBtn');
 // Click latches the panel open (a second click closes it); hovering the
 // button opens it too, without latching, so a quick look doesn't require a
 // click-to-open/click-to-close round trip for the common case.
-viewsBtn.onclick = ()=>{
+viewsBtn.onclick = (e)=>{
   if(viewsPinned){ closeViewsPopover(); return; }
   viewsPinned = true;
   openViewsPopover();
+  // #viewsPopover is appended to <body> as the *last* element (see
+  // openViewsPopover) so its own contents render on top of everything --
+  // that puts it at the very end of Tab order too, so a keyboard user
+  // pressing Tab right after opening the panel would walk through the
+  // entire rest of the app before ever reaching it. e.detail is 0 for a
+  // button "click" synthesized from Enter/Space and >=1 for an actual mouse
+  // click, so this only steals focus for the keyboard case -- a mouse click
+  // has no need for it, and hover-opens never fire a click event at all.
+  if(e.detail===0){
+    document.querySelector('#viewsPopover .views-row-base').focus(); // always present -- the "All data" row
+  }
 };
 viewsBtn.addEventListener('mouseenter', ()=>{
   clearTimeout(viewsHideTimer);
