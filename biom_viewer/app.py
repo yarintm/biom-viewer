@@ -225,6 +225,20 @@ def build_export_table(table, spec):
         if deleted:
             table.del_metadata(keys=deleted, axis=axis)
 
+        # Each entry sets one field to one literal value for exactly the ids
+        # recorded when the user clicked "Tag" -- applied in order, so a
+        # later entry touching the same id/field wins (add_metadata merges
+        # by key). Ids no longer on this axis (e.g. filtered out since) are
+        # dropped rather than raising.
+        column_sets = s.get("columnSets") or []
+        if column_sets:
+            present = set(table.ids(axis=axis))
+            for cs in column_sets:
+                field, value, ids = cs["field"], cs["value"], cs["ids"]
+                md = {id_: {field: value} for id_ in ids if id_ in present}
+                if md:
+                    table.add_metadata(md, axis=axis)
+
         # to_hdf5() requires every id on an axis to have the exact same
         # metadata *keys* (not just non-null values) -- real-world biom
         # files routinely have per-id metadata dicts that disagree (an
@@ -335,13 +349,19 @@ class SavedView:
     name: str
     state: ViewState
     saved_at: str
+    folder: str | None = None
 
     @classmethod
     def from_payload(cls, payload: dict) -> "SavedView":
-        return cls(name=payload["name"], state=ViewState.from_payload(payload), saved_at=payload["savedAt"])
+        return cls(
+            name=payload["name"],
+            state=ViewState.from_payload(payload),
+            saved_at=payload["savedAt"],
+            folder=payload.get("folder"),
+        )
 
     def to_payload(self) -> dict:
-        return {**self.state.to_payload(), "name": self.name, "savedAt": self.saved_at}
+        return {**self.state.to_payload(), "name": self.name, "savedAt": self.saved_at, "folder": self.folder}
 
 
 @dataclass
@@ -382,6 +402,15 @@ class Workspace:
 
     def find_view(self, name: str) -> SavedView | None:
         return next((v for v in self.views if v.name == name), None)
+
+    def move_view(self, name: str, folder: str | None) -> None:
+        self.views = [replace(v, folder=folder) if v.name == name else v for v in self.views]
+
+    def rename_folder(self, old_name: str, new_name: str) -> None:
+        self.views = [replace(v, folder=new_name) if v.folder == old_name else v for v in self.views]
+
+    def delete_folder(self, name: str) -> None:
+        self.views = [replace(v, folder=None) if v.folder == name else v for v in self.views]
 
 
 def _id_edges(ids, count=5):
@@ -549,7 +578,12 @@ class Api:
     def save_view(self, name: str, state: dict) -> None:
         workspace = self._workspace_store.load_workspace(self._identity)
         saved_at = datetime.now(timezone.utc).isoformat()
-        workspace.upsert_view(SavedView(name=name, state=ViewState.from_payload(state), saved_at=saved_at))
+        # Updating an existing view (Update button on a dirty view) must not
+        # silently pop it out of its folder -- only an explicit move_view
+        # call should change that.
+        existing = workspace.find_view(name)
+        folder = existing.folder if existing else None
+        workspace.upsert_view(SavedView(name=name, state=ViewState.from_payload(state), saved_at=saved_at, folder=folder))
         self._workspace_store.save_workspace(self._identity, workspace)
 
     def delete_view(self, name: str) -> None:
@@ -565,6 +599,21 @@ class Api:
             return {"ok": False}
         self._workspace_store.save_workspace(self._identity, workspace)
         return {"ok": True}
+
+    def move_view(self, name: str, folder: str | None) -> None:
+        workspace = self._workspace_store.load_workspace(self._identity)
+        workspace.move_view(name, folder)
+        self._workspace_store.save_workspace(self._identity, workspace)
+
+    def rename_folder(self, old_name: str, new_name: str) -> None:
+        workspace = self._workspace_store.load_workspace(self._identity)
+        workspace.rename_folder(old_name, new_name)
+        self._workspace_store.save_workspace(self._identity, workspace)
+
+    def delete_folder(self, name: str) -> None:
+        workspace = self._workspace_store.load_workspace(self._identity)
+        workspace.delete_folder(name)
+        self._workspace_store.save_workspace(self._identity, workspace)
 
     def open_url(self, url):
         # The right-click "Search Google" menu builds this URL itself (see
@@ -600,6 +649,15 @@ PAGE = """<!doctype html>
 {STYLE}
 </style></head>
 <body class="mode-data">
+<!-- Permanently docked at the window edge, independent of the top toolbar --
+     hovering slides the Views panel out over the grid (see openViewsPopover),
+     a click pins it open. Its own rail rather than a toolbar button because
+     it needs to stay reachable and visually separate from the mode/search
+     controls above, the way a saved-views list is a different kind of thing
+     than either. -->
+<div id="viewsRail">
+  <button id="viewsBtn" title="Saved views">☰</button>
+</div>
 <div id="info">
   <span style="display:flex;align-items:center;overflow:hidden">
     <span id="filename">loading…</span>
@@ -620,7 +678,6 @@ PAGE = """<!doctype html>
   </span>
 </div>
 <div id="axisChips">
-  <button class="tool" id="viewsBtn" title="Saved views">Views ▾</button>
   <div id="axisChipsList"></div>
 </div>
 <div id="selectedWrap">
@@ -681,6 +738,35 @@ PAGE = """<!doctype html>
       <button class="tool" id="rpApply">Apply</button>
     </div>
     <div id="rpList"></div>
+  </div>
+</div>
+<div id="tagOverlay" class="wm-overlay">
+  <div id="tagModal" class="wm-modal">
+    <header>
+      <h3>Tag Filtered Rows</h3>
+      <button class="x" id="tagClose">✕</button>
+    </header>
+    <!-- Sets a literal value on a field for exactly the rows/samples that
+         are visible under the current filter -- the way to build up a new
+         metadata column (e.g. a grouping var another tool wants to color
+         by) one filtered subset at a time, without either app needing to
+         know the other exists. -->
+    <div class="rp-form">
+      <label class="rp-label" for="tgAxis">Apply to</label>
+      <select id="tgAxis">
+        <option value="observation">Observation metadata</option>
+        <option value="sample">Sample metadata</option>
+      </select>
+      <label class="rp-label" for="tgField">Column</label>
+      <input id="tgField" type="text" list="tgFieldList" placeholder="New or existing column name">
+      <datalist id="tgFieldList"></datalist>
+      <input id="tgValue" type="text" placeholder="Value…">
+      <button class="tool" id="tgApply">Tag <span id="tgCount"></span> filtered</button>
+    </div>
+    <p class="rp-hint">Tags stick to the exact rows selected right now. Switch the filter and tag again to
+      build up other values in the same column, then clear the filter before exporting so every tagged row
+      is included.</p>
+    <div id="tgList"></div>
   </div>
 </div>
 <div id="codeOverlay" class="wm-overlay">
@@ -837,6 +923,7 @@ def main():
             MenuSeparator(),
             MenuAction("Find…", js("document.getElementById('searchBox').focus()")),
             MenuAction("Find & Replace…", js("openReplaceModal()")),
+            MenuAction("Tag Filtered Rows…", js("openTagModal()")),
         ]),
         Menu("View", [
             MenuAction("Toggle Theme", js("toggleTheme()")),

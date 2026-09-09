@@ -65,7 +65,20 @@ STYLE = """
   [data-theme="dark"]{ color-scheme: dark }
   *{scrollbar-color:var(--input-border) transparent}
   html,body{margin:0;height:100%;font:14px/1.3 -apple-system,BlinkMacSystemFont,sans-serif;background:var(--bg);color:var(--fg);overflow:hidden}
-  body{display:flex;flex-direction:column}
+  /* padding-left reserves room for #viewsRail, which is position:fixed (so
+     it stays put and full-height regardless of which part of the page has
+     scrolled) rather than a flex sibling here -- letting it overlay-out of
+     flow keeps this rule as the only layout change the rail needed. */
+  body{display:flex;flex-direction:column;padding-left:34px}
+  #viewsRail{position:fixed;left:0;top:0;bottom:0;width:34px;z-index:25;
+             background:var(--hdr-bg);border-right:1px solid var(--border);
+             display:flex;flex-direction:column;align-items:center;padding-top:8px}
+  #viewsBtn{width:24px;height:24px;flex:none;background:none;border:none;border-radius:6px;
+             color:var(--dim);font-size:14px;cursor:pointer;display:flex;align-items:center;justify-content:center;
+             transition:background var(--dur) var(--ease),color var(--dur) var(--ease)}
+  #viewsBtn:hover{background:var(--hl-soft);color:var(--fg)}
+  #viewsBtn.views-open{background:var(--hl);color:var(--accent)}
+  #viewsBtn.views-flash{background:var(--accent);color:#fff}
   button,input,select{font-family:inherit}
   button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--sel-outline);outline-offset:1px}
   #info{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 14px;
@@ -180,14 +193,15 @@ STYLE = """
   button.nav:hover:not(:disabled),button.tool:hover{background:var(--hl);border-color:var(--sel-outline)}
   button.nav:active:not(:disabled),button.tool:active{transform:translateY(.5px)}
   button.nav:disabled{opacity:.35;cursor:default}
-  #viewsBtn{max-width:380px;flex-shrink:0}
-  .views-current-name{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
-             max-width:340px;display:inline-block;vertical-align:bottom}
-  .views-dirty-dot{color:var(--row-meta);font-size:8px;margin:0 1px;vertical-align:middle}
+  /* Small corner dot rather than the old inline "●" glyph -- the rail icon
+     is a fixed 24px square with no text run to put a glyph inside anymore. */
+  #viewsBtn.views-dirty::after{content:'';position:absolute;top:3px;right:3px;width:5px;height:5px;
+             border-radius:50%;background:var(--row-meta)}
+  #viewsBtn{position:relative}
   /* Deliberately no color for the plain "a view is active" state -- the
-     name in the button already says that. Color is reserved for the one
-     state that needs it (unsaved changes), so it isn't fighting the green
-     used elsewhere (chips, selection, accent) for attention. */
+     tooltip already says that. Color is reserved for the one state that
+     needs it (unsaved changes), so it isn't fighting the green used
+     elsewhere (chips, selection, accent) for attention. */
   .views-dirty-banner{background:var(--row-meta-bg);border:1px solid var(--row-meta);border-radius:6px;
              padding:7px 8px;margin-bottom:6px}
   .views-dirty-msg{color:var(--row-meta);font-size:11.5px;font-weight:600;margin-bottom:6px}
@@ -239,7 +253,7 @@ STYLE = """
      read as though it were highlighted. Excel draws this line in plain
      window chrome; --dim is this app's equivalent. */
   .pin-last{border-bottom:2px solid var(--dim)}
-  #filterPopover,#ctxMenu,#viewsPopover,#confirmPopover{background:var(--panel-raised);border:1px solid var(--border);
+  #filterPopover,#ctxMenu,#confirmPopover{background:var(--panel-raised);border:1px solid var(--border);
              box-shadow:var(--shadow-md);border-radius:var(--radius-md)}
   #filterPopover{position:fixed;z-index:30;padding:7px;display:flex;gap:4px;align-items:center}
   /* :not([type=checkbox]) -- this 70px is for the numeric min/max fields,
@@ -278,9 +292,6 @@ STYLE = """
      setting up the state that Apply commits. */
   #filterPopover .fp-apply{background:var(--accent);color:var(--bg);border-color:var(--accent);font-weight:600}
   #filterPopover .fp-apply:hover{filter:brightness(1.08);background:var(--accent)}
-  /* Always visible now (not gated on chips.length) -- Views lives here as
-     the first item, and it needs to stay reachable even with zero other
-     chips, not disappear along with them. */
   #axisChips{display:flex;align-items:flex-start;gap:6px;padding:8px 14px;background:var(--panel-bg);border-bottom:1px solid var(--border)}
   #axisChipsList{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
   /* Deliberately neutral -- the icon per chip type (📌 ⇅ 🔽 ✏️ 🗑) already
@@ -298,8 +309,15 @@ STYLE = """
   .chip-clear-all{background:none;color:var(--dim);border-style:dashed;border-color:var(--input-border);
              font-weight:600;cursor:pointer;padding:4px 10px;box-shadow:none}
   .chip-clear-all:hover{color:var(--danger);border-color:var(--danger);background:var(--panel-raised)}
-  #viewsPopover{position:fixed;z-index:30;padding:7px;display:flex;flex-direction:column;gap:4px;width:220px}
-  .views-list{display:flex;flex-direction:column;gap:2px;max-height:260px;overflow-y:auto}
+  /* Docks flush against #viewsRail and spans the full window height,
+     sliding out over the grid rather than the small anchored dropdown the
+     rest of this app's popovers use -- a saved-views list reads as a place
+     you browse, not a single choice you make and dismiss. */
+  #viewsPopover{position:fixed;left:34px;top:0;bottom:0;z-index:30;width:240px;
+             padding:10px;display:flex;flex-direction:column;gap:6px;
+             background:var(--panel-raised);border-right:1px solid var(--border);box-shadow:var(--shadow-lg)}
+  .views-panel-hd{font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--dim);padding:2px 2px 2px}
+  .views-list{flex:1;display:flex;flex-direction:column;gap:2px;overflow-y:auto;min-height:0}
   .views-empty{color:var(--dim);font-size:12px;padding:4px 6px}
   .views-row{display:flex;align-items:center;gap:6px;padding:4px 6px;border-radius:5px;cursor:pointer;transition:background var(--dur) var(--ease)}
   .views-row:hover{background:var(--hl)}
@@ -310,8 +328,21 @@ STYLE = """
      rather than pretending to be the first item in the saved list. */
   .views-row-base{border-bottom:1px solid var(--border);border-radius:5px 5px 0 0;margin-bottom:2px;padding-bottom:6px}
   .views-base-hint{color:var(--dim);font-size:10.5px;flex:none}
-  .views-x{background:none;border:none;color:var(--dim);cursor:pointer;font-size:10px;padding:0;line-height:1}
-  .views-x:hover{color:var(--danger)}
+  /* One-level folders: a group header (collapsible, right-click for
+     rename/delete) plus its member rows indented underneath. A folder is
+     just a label on a view (SavedView.folder) -- there is no separate
+     folder entity in the list, so an "empty" folder (no view carries its
+     name yet) only exists transiently in emptyFolders, see there. */
+  .views-folder{display:flex;flex-direction:column;gap:2px}
+  .views-folder-hd{display:flex;align-items:center;gap:5px;padding:4px 5px 4px 2px;border-radius:5px;cursor:pointer;
+             color:var(--dim);font-size:10.5px;font-weight:700;letter-spacing:.03em;text-transform:uppercase}
+  .views-folder-hd:hover{background:var(--hl-soft)}
+  .views-folder-hd .vf-chev{width:11px;text-align:center;font-size:9px;transition:transform var(--dur) var(--ease)}
+  .views-folder.collapsed .vf-chev{transform:rotate(-90deg)}
+  .views-folder-hd .vf-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .views-folder-hd .vf-count{font-family:ui-monospace,monospace;font-weight:400}
+  .views-folder-body{display:flex;flex-direction:column;gap:2px;padding-left:13px;border-left:1px solid var(--border);margin-left:8px}
+  .views-folder.collapsed .views-folder-body{display:none}
   .views-save{display:flex;gap:4px;border-top:1px solid var(--border);padding-top:6px}
   .views-save-input,.views-rename-input{flex:1;box-sizing:border-box;background:var(--input-bg);color:var(--fg);
     border:1px solid var(--input-border);border-radius:5px;padding:3px 6px;font-size:12px}
@@ -428,27 +459,29 @@ STYLE = """
   body.mode-row .rh,body.mode-data .rh{box-shadow:inset 3px 0 0 var(--row-meta)}
   body.mode-col .hdr.colhdr,body.mode-data .hdr.colhdr{background:var(--col-meta-bg);color:var(--col-meta);font-weight:700}
   body.mode-col .hdr.colhdr,body.mode-data .hdr.colhdr{box-shadow:inset 0 -3px 0 var(--col-meta)}
-  #replaceModal{width:420px;border-radius:var(--radius-lg)}
-  #replaceModal header{justify-content:space-between}
-  #replaceModal header h3{margin-right:0}
-  #replaceModal .rp-form{padding:12px 14px;display:flex;flex-wrap:wrap;gap:6px}
-  #replaceModal .rp-form select, #replaceModal .rp-form input{background:var(--input-bg);color:var(--fg);
+  #replaceModal, #tagModal{width:420px;border-radius:var(--radius-lg)}
+  #replaceModal header, #tagModal header{justify-content:space-between}
+  #replaceModal header h3, #tagModal header h3{margin-right:0}
+  #replaceModal .rp-form, #tagModal .rp-form{padding:12px 14px;display:flex;flex-wrap:wrap;gap:6px}
+  #replaceModal .rp-form select, #replaceModal .rp-form input,
+  #tagModal .rp-form select, #tagModal .rp-form input{background:var(--input-bg);color:var(--fg);
              border:1px solid var(--input-border);border-radius:4px;padding:4px 6px;font-size:12.5px}
-  #replaceModal .rp-form select{flex:1 1 100%}
+  #replaceModal .rp-form select, #tagModal .rp-form select{flex:1 1 100%}
   .rp-label{flex:1 1 100%;font-size:11px;color:var(--dim);margin-bottom:-3px}
+  .rp-hint{flex:1 1 100%;font-size:11px;color:var(--dim);margin:2px 0 0;padding:0 14px 10px}
   /* Bottom-right and accent-filled: it is the only action in the dialog
      that changes anything, and it was sitting bottom-left looking exactly
      like the toolbar buttons that don't. */
-  #replaceModal .rp-form #rpApply{margin-left:auto;background:var(--accent);color:var(--bg);
+  #replaceModal .rp-form #rpApply, #tagModal .rp-form #tgApply{margin-left:auto;background:var(--accent);color:var(--bg);
              border-color:var(--accent);font-weight:600}
-  #replaceModal .rp-form #rpApply:hover{filter:brightness(1.08);background:var(--accent)}
-  #replaceModal .rp-form input{flex:1 1 45%;min-width:0}
-  #replaceModal .rp-form button{flex:0 0 auto}
-  #rpList{padding:0 14px 14px;display:flex;flex-direction:column;gap:4px;max-height:30vh;overflow-y:auto}
-  #rpList .rp-item{display:flex;align-items:center;justify-content:space-between;gap:8px;
+  #replaceModal .rp-form #rpApply:hover, #tagModal .rp-form #tgApply:hover{filter:brightness(1.08);background:var(--accent)}
+  #replaceModal .rp-form input, #tagModal .rp-form input{flex:1 1 45%;min-width:0}
+  #replaceModal .rp-form button, #tagModal .rp-form button{flex:0 0 auto}
+  #rpList, #tgList{padding:0 14px 14px;display:flex;flex-direction:column;gap:4px;max-height:30vh;overflow-y:auto}
+  #rpList .rp-item, #tgList .rp-item{display:flex;align-items:center;justify-content:space-between;gap:8px;
              background:var(--hl);border-radius:6px;padding:4px 8px;font-size:12px}
-  #rpList .rp-item button{background:none;border:none;color:var(--dim);cursor:pointer;font-size:12px}
-  #rpList .rp-item button:hover{color:var(--fg)}
+  #rpList .rp-item button, #tgList .rp-item button{background:none;border:none;color:var(--dim);cursor:pointer;font-size:12px}
+  #rpList .rp-item button:hover, #tgList .rp-item button:hover{color:var(--fg)}
   .wm-overlay{position:fixed;inset:0;background:rgba(0,0,0,.4);backdrop-filter:blur(6px);display:none;
                align-items:center;justify-content:center;z-index:10}
   .wm-overlay.open{display:flex}
