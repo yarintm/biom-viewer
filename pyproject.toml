@@ -21,6 +21,7 @@ classifiers = [
 dependencies = [
   "biom-format>=2.1",
   "pywebview>=4.0",
+  "mcp[cli]>=1.2",
 ]
 
 [project.optional-dependencies]
@@ -32,6 +33,7 @@ Issues = "https://github.com/yarintm/biom-viewer/issues"
 
 [project.scripts]
 biom-viewer = "biom_viewer.app:main"
+biom-viewer-mcp = "biom_viewer.mcp_server:main"
 
 [tool.setuptools.packages.find]
 include = ["biom_viewer*"]
