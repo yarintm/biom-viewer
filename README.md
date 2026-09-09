@@ -171,6 +171,34 @@ PyInstaller.
 See [CONTRIBUTING.md](CONTRIBUTING.md) before sending a PR — the one rule
 that matters is not densifying the full table.
 
+## MCP server
+
+biom-viewer ships an [MCP](https://modelcontextprotocol.io) server so an LLM
+client can inspect a `.biom` file's metadata and create views (filters,
+sort, pinned rows/fields) from a natural-language request — including many
+at once, e.g. "make one view per diagnosis value."
+
+Install with the `mcp` extra already included, then point a client (e.g.
+Claude Desktop, in `claude_desktop_config.json`) at it:
+
+```json
+{
+  "mcpServers": {
+    "biom-viewer": {
+      "command": "biom-viewer-mcp",
+      "args": ["/absolute/path/to/table.biom"]
+    }
+  }
+}
+```
+
+Views created this way are written to the same workspace store the desktop
+app reads, keyed by the table's content fingerprint — reopen (or reload) the
+file in biom-viewer to see them.
+
+Tools exposed: `list_fields`, `field_summary`, `create_view`, `create_views`,
+`list_views`, `delete_view`.
+
 ## License
 
 [MIT](LICENSE)
