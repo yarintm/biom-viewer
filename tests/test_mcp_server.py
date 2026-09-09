@@ -3,6 +3,7 @@ import biom
 import pytest
 
 from biom_viewer import app, mcp_server
+from biom_viewer.app import WorkspaceStore
 
 
 def make_table():
@@ -36,8 +37,9 @@ def make_table():
 
 
 @pytest.fixture(autouse=True)
-def _api(monkeypatch):
-    api = app.Api(make_table(), "fake.biom")
+def _api(monkeypatch, tmp_path):
+    store = WorkspaceStore(tmp_path / "state.json")
+    api = app.Api(make_table(), "fake.biom", workspace_store=store)
     monkeypatch.setattr(mcp_server, "_api", api)
     return api
 
@@ -93,3 +95,23 @@ def test_create_view_defaults_produce_empty_but_valid_state(_api):
     assert result["pinnedObs"] == []
     assert result["pinnedColFields"] == []
     assert result["axisState"]["observation"]["sortDir"] == 0
+
+
+def test_create_views_creates_all_named_views(_api):
+    results = mcp_server.create_views(
+        [
+            {"name": "IBD", "sample_filters": [{"field": "diagnosis", "kind": "categorical", "text": "IBD"}]},
+            {"name": "healthy", "sample_filters": [{"field": "diagnosis", "kind": "categorical", "text": "healthy"}]},
+        ]
+    )
+    assert len(results) == 2
+    names = {v["name"] for v in mcp_server.list_views()}
+    assert names == {"IBD", "healthy"}
+
+
+def test_delete_view_removes_it(_api):
+    mcp_server.create_view(name="temp")
+    assert any(v["name"] == "temp" for v in mcp_server.list_views())
+    result = mcp_server.delete_view("temp")
+    assert result == {"ok": True}
+    assert not any(v["name"] == "temp" for v in mcp_server.list_views())

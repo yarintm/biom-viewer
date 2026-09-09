@@ -98,9 +98,31 @@ def create_view(
     return payload
 
 
+def create_views(specs: list[dict]) -> list[dict]:
+    """Create several views in one call — e.g. "one view per diagnosis
+    value". Each item in `specs` is a kwargs dict for create_view (must
+    include "name")."""
+    return [create_view(**spec) for spec in specs]
+
+
+def list_views() -> list[dict]:
+    """Name and save timestamp of every saved view."""
+    workspace = _get_api().load_workspace()
+    return [{"name": v["name"], "saved_at": v["savedAt"]} for v in workspace["views"]]
+
+
+def delete_view(name: str) -> dict:
+    """Delete a saved view by name."""
+    _get_api().delete_view(name)
+    return {"ok": True}
+
+
 mcp.tool()(list_fields)
 mcp.tool()(field_summary)
 mcp.tool()(create_view)
+mcp.tool()(create_views)
+mcp.tool()(list_views)
+mcp.tool()(delete_view)
 
 
 def main() -> None:
