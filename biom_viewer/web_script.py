@@ -1664,20 +1664,6 @@ function undeleteField(axis, field){
   renderAxisChips();
 }
 
-// Undoes a view's rowFields/colFields whitelist (see renderAxisChips) by
-// appending back every field the file has that isn't explicitly deleted.
-function restoreHiddenFields(axis){
-  recordHistory('show all ' + axisLabel(axis) + ' fields');
-  const fieldsArr = axis==='observation' ? rowFields : colFields;
-  const fullFields = fieldUnion(axis==='observation' ? meta.row_metadata : meta.col_metadata);
-  const deleted = axisState[axis].deletedFields;
-  fullFields.forEach(f=>{ if(!fieldsArr.includes(f) && !deleted.includes(f)) fieldsArr.push(f); });
-  rowPage=0; colPage=0;
-  scheduleAutosave();
-  render();
-  renderAxisChips();
-}
-
 // One chip per active sort and per active filter (not one combined chip per
 // axis) so each can be read and removed independently -- a single "3
 // filters" chip told you nothing about what was actually filtered.
@@ -1696,26 +1682,15 @@ function axisLabel(axis){ return axisWord(axis, true); }
 function renderAxisChips(){
   const chips = [];
   if(pinnedObs.size>0){
-    chips.push(`<span class="chip">📌 ${pinnedObs.size} pinned` +
+    chips.push(`<span class="chip">📌 ${pinnedObs.size} ${axisWord('observation', pinnedObs.size!==1)} pinned to top` +
       `<button class="chip-x" data-kind="unpinAll" title="Unpin all">✕</button></span>`);
   }
   if(pinnedColFields.size>0){
-    chips.push(`<span class="chip">📌 ${pinnedColFields.size} pinned field${pinnedColFields.size===1?'':'s'}` +
+    chips.push(`<span class="chip">📌 ${pinnedColFields.size} sample field${pinnedColFields.size===1?'':'s'} pinned to top` +
       `<button class="chip-x" data-kind="unpinAllFields" title="Unpin all">✕</button></span>`);
   }
   ['observation','sample'].forEach(axis=>{
     const st = axisState[axis];
-    // rowFields/colFields can be a whitelist saved by a view (e.g. the MCP
-    // server's create_view(col_fields=[...])) that's strictly smaller than
-    // every field the file actually has -- with no chip, that looked like
-    // silent data loss instead of a deliberate (if opaque) view choice.
-    const fieldsArr = axis==='observation' ? rowFields : colFields;
-    const fullFields = fieldUnion(axis==='observation' ? meta.row_metadata : meta.col_metadata);
-    const hiddenFields = fullFields.filter(f=>!fieldsArr.includes(f) && !st.deletedFields.includes(f));
-    if(hiddenFields.length){
-      chips.push(`<span class="chip">👁 ${axisLabel(axis)}: view shows ${fieldsArr.length} of ${fullFields.length} fields` +
-        `<button class="chip-x" data-kind="restoreFields" data-axis="${axis}" title="Show all fields">✕</button></span>`);
-    }
     if(st.sortDir!==0){
       chips.push(`<span class="chip">⇅ ${axisLabel(axis)}: <code>${escapeHtml(fieldDisplay(axis, st.sortField))}</code> ${st.sortDir===1?'▲':'▼'}` +
         `<button class="chip-x" data-kind="sort" data-axis="${axis}" title="Clear sort">✕</button></span>`);
@@ -1755,7 +1730,6 @@ function renderAxisChips(){
     else if(kind==='replace') btn.onclick = ()=>removeReplacement(btn.dataset.axis, btn.dataset.field);
     else if(kind==='unrename') btn.onclick = ()=>unrenameField(btn.dataset.axis, btn.dataset.field);
     else if(kind==='undelete') btn.onclick = ()=>undeleteField(btn.dataset.axis, btn.dataset.field);
-    else if(kind==='restoreFields') btn.onclick = ()=>restoreHiddenFields(btn.dataset.axis);
     else if(kind==='unpinAll') btn.onclick = ()=>{
       pinnedObs.clear();
       selPinnedRaw = null;
