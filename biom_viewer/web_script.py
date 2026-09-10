@@ -1682,11 +1682,11 @@ function axisLabel(axis){ return axisWord(axis, true); }
 function renderAxisChips(){
   const chips = [];
   if(pinnedObs.size>0){
-    chips.push(`<span class="chip">📌 ${pinnedObs.size} pinned` +
+    chips.push(`<span class="chip">📌 ${pinnedObs.size} ${axisWord('observation', pinnedObs.size!==1)} pinned to top` +
       `<button class="chip-x" data-kind="unpinAll" title="Unpin all">✕</button></span>`);
   }
   if(pinnedColFields.size>0){
-    chips.push(`<span class="chip">📌 ${pinnedColFields.size} pinned field${pinnedColFields.size===1?'':'s'}` +
+    chips.push(`<span class="chip">📌 ${pinnedColFields.size} sample field${pinnedColFields.size===1?'':'s'} pinned to top` +
       `<button class="chip-x" data-kind="unpinAllFields" title="Unpin all">✕</button></span>`);
   }
   ['observation','sample'].forEach(axis=>{
@@ -2337,11 +2337,12 @@ function openViewRowContextMenu(e, name){
   menu.style.left = e.clientX + 'px';
   menu.style.top = e.clientY + 'px';
   menu.innerHTML =
-    `<button class="ctx-item" data-act="rename">✎ Rename</button>` +
-    `<button class="ctx-item" data-act="move">⌂ Move to folder…</button>` +
+    `<button class="ctx-item" data-act="rename">✏️ Rename</button>` +
+    `<button class="ctx-item" data-act="move">📁 Move to folder…</button>` +
     `<div class="ctx-sep"></div>` +
-    `<button class="ctx-item" data-act="delete">✕ Delete</button>`;
+    `<button class="ctx-item" data-act="delete">🗑 Delete</button>`;
   document.body.appendChild(menu);
+  wireCtxMenuOverViewsPanel(menu);
   // stopPropagation matters here (not just in openViewRowContextMenu's
   // sibling functions): the button's own click keeps bubbling to document
   // after this handler returns, straight into both the unconditional
@@ -2371,8 +2372,9 @@ function openMoveToFolderMenu(e, view){
   ).join('');
   const noFolderItem = `<button class="ctx-item" data-folder="">${!view.folder ? '✓ ' : ''}— No folder —</button>`;
   menu.innerHTML = folderItems + noFolderItem + `<div class="ctx-sep"></div>` +
-    `<button class="ctx-item" data-act="new">+ New folder…</button>`;
+    `<button class="ctx-item" data-act="new">📁 New folder…</button>`;
   document.body.appendChild(menu);
+  wireCtxMenuOverViewsPanel(menu);
   menu.querySelectorAll('[data-folder]').forEach(btn=>{
     btn.onclick = (ev)=>{ ev.stopPropagation(); closeContextMenu(); moveViewToFolder(view.name, btn.dataset.folder || null); };
   });
@@ -2389,10 +2391,11 @@ function openFolderContextMenu(e, name){
   menu.style.left = e.clientX + 'px';
   menu.style.top = e.clientY + 'px';
   menu.innerHTML =
-    `<button class="ctx-item" data-act="rename">✎ Rename folder</button>` +
+    `<button class="ctx-item" data-act="rename">✏️ Rename folder</button>` +
     `<div class="ctx-sep"></div>` +
-    `<button class="ctx-item" data-act="delete">✕ Delete folder</button>`;
+    `<button class="ctx-item" data-act="delete">🗑 Delete folder</button>`;
   document.body.appendChild(menu);
+  wireCtxMenuOverViewsPanel(menu);
   menu.querySelector('[data-act="rename"]').onclick = (ev)=>{
     ev.stopPropagation();
     closeContextMenu();
@@ -2416,8 +2419,9 @@ function openEmptySpaceContextMenu(e){
   menu.id = 'ctxMenu';
   menu.style.left = e.clientX + 'px';
   menu.style.top = e.clientY + 'px';
-  menu.innerHTML = `<button class="ctx-item" data-act="new">+ New folder</button>`;
+  menu.innerHTML = `<button class="ctx-item" data-act="new">📁 New folder</button>`;
   document.body.appendChild(menu);
+  wireCtxMenuOverViewsPanel(menu);
   menu.querySelector('[data-act="new"]').onclick = (ev)=>{
     ev.stopPropagation();
     closeContextMenu();
@@ -2591,6 +2595,19 @@ function closeContextMenu(){
   const existing = document.getElementById('ctxMenu');
   if(existing) existing.remove();
   return !!existing;
+}
+
+// #ctxMenu is a body-level sibling of #viewsPopover, not a child of it (see
+// the comment on #ctxMenu's outside-click exclusion below) -- so moving the
+// mouse off a views-row onto this menu is, as far as the DOM is concerned, a
+// mouseleave on the popover, which arms its close-on-hover-out timer. Without
+// this, right-clicking a view then moving toward "Rename" closed the whole
+// panel out from under the menu before the click landed.
+function wireCtxMenuOverViewsPanel(menu){
+  menu.addEventListener('mouseenter', ()=> clearTimeout(viewsHideTimer));
+  menu.addEventListener('mouseleave', ()=>{
+    if(!viewsPinned) viewsHideTimer = setTimeout(closeViewsPopover, 200);
+  });
 }
 
 // The native right-click menu (WKWebView's default) doesn't offer a web
