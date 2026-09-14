@@ -732,7 +732,7 @@ PAGE = """<!doctype html>
     </span>
     <span id="searchWrap">
       <input id="searchBox" type="text" placeholder="Search…" autocomplete="off">
-      <button class="tool" id="searchHelp" type="button" aria-label="Search syntax help" title="Search taxa, samples, fields, or values. Use field=value to match a metadata field (e.g. subject_id=501). For abundance cells, use comparisons like <1, >0.5, =0.">?</button>
+      <button class="tool" id="searchHelp" type="button" aria-label="Search syntax help" data-tip="Search taxa, samples, fields, or values. Use field=value to match a metadata field (e.g. subject_id=501). For abundance cells, use comparisons like <1, >0.5, =0.">?</button>
       <button class="tool" id="searchPin" title="Keep search results open while you click around the grid">📌<span>Keep open</span></button>
       <div id="searchResults"></div>
     </span>
