@@ -3170,15 +3170,21 @@ document.addEventListener('keydown', (e)=>{
   }
   // Home/End jump the column axis (horizontal scroll) to its first/last
   // page; PageUp/PageDown step the row axis (vertical scroll) one page at a
-  // time -- same guard as the arrow keys so typing in a field or an open
-  // popover isn't hijacked.
-  if(!mod && !e.altKey && (e.key==='Home' || e.key==='End' || e.key==='PageUp' || e.key==='PageDown') && meta
+  // time. Shift flips each pair to the other axis's equivalent action --
+  // Shift+Home/End jumps the row axis all the way, Shift+PageUp/PageDown
+  // steps the column axis one page -- so every combination of "jump vs.
+  // step" x "row vs. column" is reachable. Same guard as the arrow keys so
+  // typing in a field or an open popover isn't hijacked.
+  const PAGE_NAV_KEYS = {Home:1, End:1, PageUp:1, PageDown:1};
+  if(!mod && !e.altKey && PAGE_NAV_KEYS[e.key] && meta
      && !/^(INPUT|TEXTAREA|SELECT)$/.test((document.activeElement||{}).tagName||'')
      && !document.getElementById('ctxMenu') && !document.getElementById('filterPopover')
      && !document.getElementById('viewsPopover') && !document.getElementById('confirmPopover')
      && !document.querySelector('.wm-overlay.open')){
     e.preventDefault();
-    const targetId = {Home:'colStart', End:'colEnd', PageUp:'rowUp', PageDown:'rowDown'}[e.key];
+    const targetId = e.shiftKey
+      ? {Home:'rowStart', End:'rowEnd', PageUp:'colPrev', PageDown:'colNext'}[e.key]
+      : {Home:'colStart', End:'colEnd', PageUp:'rowUp', PageDown:'rowDown'}[e.key];
     document.getElementById(targetId).click();
     return;
   }

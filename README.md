@@ -142,6 +142,8 @@ biom-viewer path/to/table.biom
 |---|---|
 | **▲ ▼ ◀ ▶** | page through observations and samples (page size auto-fits the window) |
 | **Arrow keys** | move the selection · **⌘C** copy it |
+| **Page Up / Page Down** | page observations up/down · **⇧Page Up / ⇧Page Down** page samples left/right |
+| **Home / End** | jump samples to the first/last page · **⇧Home / ⇧End** jump observations to the first/last page |
 | **⌘F** | search · **⌘R** find & replace |
 | **⌘Z / ⇧⌘Z** | undo / redo |
 | **⌘⏎** | open the selected cell full-size |

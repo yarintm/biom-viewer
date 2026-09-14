@@ -694,18 +694,18 @@ PAGE = """<!doctype html>
 
 <div id="body">
   <div id="rowNav">
-    <button class="nav nav-rot" id="rowStart" title="Jump to start">⇤</button>
+    <button class="nav nav-rot" id="rowStart" title="Jump to start (Shift+Home)">⇤</button>
     <button class="nav" id="rowUp" title="Page up (Page Up)">▲</button>
     <span id="rowRange"></span>
     <button class="nav" id="rowDown" title="Page down (Page Down)">▼</button>
-    <button class="nav nav-rot" id="rowEnd" title="Jump to end">⇥</button>
+    <button class="nav nav-rot" id="rowEnd" title="Jump to end (Shift+End)">⇥</button>
   </div>
   <div id="main">
     <div id="colNav">
       <button class="nav" id="colStart" title="Jump to start (Home)">⇤</button>
-      <button class="nav" id="colPrev">◀</button>
+      <button class="nav" id="colPrev" title="Page left (Shift+Page Up)">◀</button>
       <span id="colRange"></span>
-      <button class="nav" id="colNext">▶</button>
+      <button class="nav" id="colNext" title="Page right (Shift+Page Down)">▶</button>
       <button class="nav" id="colEnd" title="Jump to end (End)">⇥</button>
       <!-- Cell shading is a new visual language; without the scale beside
            it, a darker green is just a darker green. Data mode only. -->
