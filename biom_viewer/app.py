@@ -907,6 +907,20 @@ def main():
         # user is actually looking at (there can be several now).
         return lambda: (webview.active_window() or webview.windows[0]).evaluate_js(code)
 
+    def open_file_dialog():
+        # Same file-picker call export_table() already makes (see Api.export_table),
+        # just OPEN instead of SAVE -- attached to the focused window for the same
+        # reason js() is: whichever window the user's looking at owns the dialog.
+        window = webview.active_window() or webview.windows[0]
+        result = window.create_file_dialog(
+            webview.FileDialog.OPEN,
+            file_types=("BIOM file (*.biom)", "All files (*.*)"),
+        )
+        if not result:
+            return
+        path = result[0] if isinstance(result, (list, tuple)) else result
+        open_window(path)
+
     # Replaces pywebview's default Edit/View menus (Cut/Copy/Paste/Fullscreen)
     # with the app's own actions -- native menu items can't carry a Cocoa key
     # equivalent through pywebview's public API, so ⌘-shortcuts stay bound in
@@ -914,6 +928,8 @@ def main():
     webview.settings["SHOW_DEFAULT_MENUS"] = False
     menu = [
         Menu("File", [
+            MenuAction("Open…", open_file_dialog),
+            MenuSeparator(),
             MenuAction("Export as Python…", js("openExportModal()")),
             MenuAction("Export View as .biom…", js("exportBiomFile()")),
         ]),
