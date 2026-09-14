@@ -3157,6 +3157,11 @@ searchBox.addEventListener('input', ()=>{
   clearTimeout(searchDebounce);
   searchDebounce = setTimeout(()=>runSearch(searchBox.value), 120);
 });
+// The native `title` attribute is the tooltip content for hover, but a "?"
+// reads as clickable -- clicking it and having nothing happen looks broken.
+// Route the click to the same detail bar every other click-for-info
+// interaction in the app already uses, rather than adding a new popover.
+document.getElementById('searchHelp').onclick = e => showSelected(e.currentTarget.title);
 searchBox.addEventListener('keydown', (e)=>{
   const results = document.getElementById('searchResults');
   if(!results.classList.contains('open')) return;
