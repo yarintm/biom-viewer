@@ -829,6 +829,59 @@ def _set_dock_icon():
         pass
 
 
+def _fix_edit_menu_shortcuts():
+    # Cmd+C/X/V/A only work anywhere in a Cocoa app -- including unrelated
+    # native panels like the Open dialog's "Go to Folder" field, not just
+    # this app's own text inputs -- if *some* NSMenuItem in the menu bar is
+    # bound to cut:/copy:/paste:/selectAll: with that key equivalent. main()
+    # sets SHOW_DEFAULT_MENUS = False so the custom Edit menu (Undo/Redo/
+    # Find/...) can replace pywebview's default one, but pywebview's public
+    # MenuAction always creates its native item with an empty key equivalent
+    # (see cocoa.py's _process_menu_items) -- there's no way to ask for a
+    # real one through it. Without SHOW_DEFAULT_MENUS's menu supplying those
+    # four bindings, nothing in the whole app's menu bar does, and paste
+    # silently stops working everywhere, not just in this app's own fields.
+    #
+    # Bolted on here via raw AppKit rather than through webview.menu because
+    # pywebview rebuilds the entire native menu from scratch on every
+    # windowDidBecomeKey_ (see BrowserView.WindowDelegate in cocoa.py) --
+    # first show, switching between this app's windows, all of it -- which
+    # would silently drop a one-time patch. Re-applying on every
+    # NSWindowDidBecomeKeyNotification (idempotent: skip if Paste is already
+    # there) survives that instead of relying on a single lucky patch point.
+    if sys.platform != "darwin":
+        return
+    try:
+        from AppKit import NSApp, NSMenuItem
+        from Foundation import NSNotificationCenter
+    except ImportError:
+        return
+
+    def apply_patch(_notification=None):
+        app = NSApp()
+        main_menu = app.mainMenu() if app else None
+        if not main_menu:
+            return
+        edit_menu = next(
+            (item.submenu() for item in main_menu.itemArray() if item.title() == "Edit"), None
+        )
+        if edit_menu is None or edit_menu.itemWithTitle_("Paste") is not None:
+            return
+        edit_menu.addItem_(NSMenuItem.separatorItem())
+        for title, action, key in [
+            ("Cut", "cut:", "x"),
+            ("Copy", "copy:", "c"),
+            ("Paste", "paste:", "v"),
+            ("Select All", "selectAll:", "a"),
+        ]:
+            edit_menu.addItemWithTitle_action_keyEquivalent_(title, action, key)
+
+    NSNotificationCenter.defaultCenter().addObserverForName_object_queue_usingBlock_(
+        "NSWindowDidBecomeKeyNotification", None, None, apply_patch
+    )
+    apply_patch()
+
+
 def open_window(path):
     table = biom.load_table(path)
     # Standard Mac document-window convention is just the filename, not
@@ -925,7 +978,10 @@ def main():
     # with the app's own actions -- native menu items can't carry a Cocoa key
     # equivalent through pywebview's public API, so ⌘-shortcuts stay bound in
     # the page's own keydown listener; these menu items are for discovery/click.
+    # This also drops Cut/Copy/Paste/Select All's key equivalents app-wide
+    # (see _fix_edit_menu_shortcuts), so that has to run to get them back.
     webview.settings["SHOW_DEFAULT_MENUS"] = False
+    _fix_edit_menu_shortcuts()
     menu = [
         Menu("File", [
             MenuAction("Open…", open_file_dialog),
