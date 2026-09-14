@@ -656,7 +656,7 @@ PAGE = """<!doctype html>
      controls above, the way a saved-views list is a different kind of thing
      than either. -->
 <div id="viewsRail">
-  <button id="viewsBtn" title="Saved views">☰</button>
+  <button id="viewsBtn" title="Saved views" aria-label="Saved views">☰</button>
 </div>
 <div id="info">
   <span style="display:flex;align-items:center;overflow:hidden">
