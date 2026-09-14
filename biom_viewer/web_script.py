@@ -868,6 +868,7 @@ const SEARCH_KINDS = [
   // 'Observation fields' in the same tab strip. The internal key stays taxa.
   ['samples', 'Samples'], ['taxa', 'Observations'],
   ['rowFields', 'Observation fields'], ['colFields', 'Sample fields'], ['values', 'Values'],
+  ['cells', 'Cells'],
 ];
 
 // Long hierarchical identifiers (taxonomy strings) sharing a common prefix
@@ -896,17 +897,62 @@ function highlightAround(text, q){
 }
 
 function searchRowHtml(e){
+  if(e.type==='dataCell') return escapeHtml(e.label);
   return e.type==='rowValue' || e.type==='colValue'
     ? `<span class="sr-field">${escapeHtml(e.field)}:</span> ${highlightAround(e.value, searchValueQuery)}  —  ${escapeHtml(e.id)}`
     : highlightAround(e.label, searchQuery);
 }
 
-function runSearch(raw){
+// Numeric comparator query for abundance cells, e.g. "<1", ">=0.5", "=0" --
+// distinct from parseFieldQuery's "field=value" syntax below (a bare
+// leading operator can never be a valid field name, so the two can't
+// collide).
+const CELL_QUERY_RE = /^(<=|>=|<|>|=)\\s*(-?\\d+\\.?\\d*)$/;
+
+// The matrix is scanned in Python against the sparse structure (see
+// Api.cell_matches / _cell_matches in app.py), not densified into a
+// rows x cols array here -- this app's CONTRIBUTING.md rules that out
+// ("Never densify the full table"). The backend already caps the returned
+// match list at ~200 (mirroring this UI's other search tabs) but also
+// reports the true total match count, since a loose query like "<1" can
+// match far more cells than are worth listing; `total` rides along on the
+// returned array so renderSearchPanel's overflow footer can show the real
+// count instead of just the length of what was actually sent over.
+async function computeCellMatches(op, threshold){
+  const res = await window.pywebview.api.cell_matches(op, threshold);
+  const matches = res.matches.map(([r,c,v])=>({
+    type: 'dataCell', rowRaw: r, colRaw: c, value: v,
+    label: `${meta.row_ids[r]}  |  ${meta.col_ids[c]}${SEL_EQ}${v}`,
+  }));
+  matches.total = res.total;
+  return matches;
+}
+
+// Bumped on every call so a slower-to-resolve cell-value fetch from an
+// earlier keystroke can't overwrite a faster one from a later keystroke --
+// the existing text-search path has no such race (it's synchronous), but
+// the async matrix fetch below does.
+let searchGen = 0;
+
+async function runSearch(raw){
   const q = raw.trim().toLowerCase();
   const results = document.getElementById('searchResults');
   searchFlat = [];
   searchHiIdx = -1;
   if(!q){ results.classList.remove('open'); results.innerHTML=''; searchGroups={}; return; }
+
+  const cellQuery = q.match(CELL_QUERY_RE);
+  if(cellQuery){
+    const myGen = ++searchGen;
+    const matches = await computeCellMatches(cellQuery[1], parseFloat(cellQuery[2]));
+    if(myGen !== searchGen) return; // a newer query superseded this one
+    searchGroups = { samples: [], taxa: [], rowFields: [], colFields: [], values: [], cells: matches };
+    searchQuery = ''; searchValueQuery = '';
+    searchTab = 'all';
+    renderSearchPanel();
+    return;
+  }
+  searchGen++; // invalidate any in-flight cell-value fetch; this query took the sync path
 
   const byLabel = arr => arr.map(e=>({e, s:matchScore(e.label, q)})).filter(x=>x.s>=0)
     .sort((a,b)=>a.s-b.s).map(x=>x.e);
@@ -941,8 +987,14 @@ function renderSearchPanel(){
   searchFlat = [];
   searchHiIdx = -1;
 
+  // A group's displayed count: usually just its array length, but the
+  // cells group is pre-capped server-side (see computeCellMatches) and
+  // carries the true match count separately in .total, since a loose
+  // comparator query can match far more cells than are worth transferring.
+  const groupCount = k => searchGroups[k].total ?? searchGroups[k].length;
+
   const live = SEARCH_KINDS.filter(([k])=>searchGroups[k] && searchGroups[k].length);
-  const total = live.reduce((n,[k])=>n+searchGroups[k].length, 0);
+  const total = live.reduce((n,[k])=>n+groupCount(k), 0);
   if(!total){
     results.innerHTML = '<div class="sr-empty">No matches</div>';
     results.classList.add('open');
@@ -956,7 +1008,7 @@ function renderSearchPanel(){
   let html = `<div class="stabs">`;
   if(!soleGroup) html += `<div class="stab${searchTab==='all'?' active':''}" data-tab="all">All<span class="n">${total}</span></div>`;
   live.forEach(([k,cap])=>{
-    html += `<div class="stab${(soleGroup||searchTab===k)?' active':''}" data-tab="${k}">${cap}<span class="n">${searchGroups[k].length}</span></div>`;
+    html += `<div class="stab${(soleGroup||searchTab===k)?' active':''}" data-tab="${k}">${cap}<span class="n">${groupCount(k)}</span></div>`;
   });
   html += `</div>`;
 
@@ -968,7 +1020,7 @@ function renderSearchPanel(){
       h += `<div class="sr" data-i="${searchFlat.length}">${searchRowHtml(e)}</div>`;
       searchFlat.push(e);
     });
-    const rest = matches.length - Math.min(limit, matches.length);
+    const rest = groupCount(k) - Math.min(limit, matches.length);
     if(rest) h += moreTab
       ? `<div class="sr-more" data-tab="${k}">+${rest} more — show all</div>`
       : `<div class="sr-more">+${rest} more — refine your search</div>`;
@@ -1043,12 +1095,18 @@ async function jumpTo(entry){
     rowPage = Math.floor(entry.fi / rowsPerPage());
     colPage = Math.floor(pos / colsPerPage());
     selR = entry.fi; selC = pos;
+  } else if(entry.type==='dataCell'){
+    setMode('data');
+    selectObservationRow(entry.rowRaw);
+    const pos = resolveAxisPosition('sample', entry.colRaw);
+    colPage = Math.floor(pos / colsPerPage());
+    selC = pos;
   }
   await render();
   const label = entry.type==='rowValue' ? `${entry.id}  |  ${entry.field}${SEL_EQ}${entry.value}`
     : entry.type==='colValue' ? `${entry.field}  |  ${entry.id}${SEL_EQ}${entry.value}`
-    : entry.label;
-  showSelected(label);
+    : entry.label; // dataCell's label is already "row | col = value", built at match time
+  showSelected(label, entry.type==='dataCell' ? entry.value : undefined);
 }
 
 // render() awaits several pywebview API round-trips before it ever touches
