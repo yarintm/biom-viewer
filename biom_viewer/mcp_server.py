@@ -62,8 +62,6 @@ def _axis_state(filters: list[dict] | None, sort: dict | None) -> dict:
 def create_view(
     name: str,
     mode: str = "data",
-    row_fields: list[str] | None = None,
-    col_fields: list[str] | None = None,
     observation_filters: list[dict] | None = None,
     sample_filters: list[dict] | None = None,
     observation_sort: dict | None = None,
@@ -82,7 +80,10 @@ def create_view(
     pinned_observation_ids: raw observation row indices to freeze on screen
       (get these from meta()'s row_ids order, index 0-based).
     pinned_column_fields: metadata field names to freeze in col-metadata mode,
-      e.g. ["diagnosis"].
+      e.g. ["diagnosis"]. Pinning only reorders (freezes at the top) -- every
+      field stays visible. There's no way to hide a metadata field through
+      this tool; the GUI's field-delete is a separate, per-file operation
+      this server doesn't expose.
     """
     payload = {
         "mode": mode,
@@ -90,8 +91,8 @@ def create_view(
             "observation": _axis_state(observation_filters, observation_sort),
             "sample": _axis_state(sample_filters, sample_sort),
         },
-        "rowFields": row_fields or [],
-        "colFields": col_fields or [],
+        "rowFields": list_fields("observation"),
+        "colFields": list_fields("sample"),
         "pinnedObs": pinned_observation_ids or [],
         "pinnedColFields": pinned_column_fields or [],
     }

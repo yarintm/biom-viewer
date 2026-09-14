@@ -68,7 +68,6 @@ def test_create_view_round_trips_through_workspace(_api):
     result = mcp_server.create_view(
         name="IBD samples",
         mode="data",
-        col_fields=["diagnosis"],
         sample_filters=[{"field": "diagnosis", "kind": "categorical", "text": "IBD"}],
         sample_sort={"field": "age", "dir": -1},
         pinned_observation_ids=[0],
@@ -88,10 +87,13 @@ def test_create_view_round_trips_through_workspace(_api):
     assert saved["axisState"]["observation"]["filters"] == []
 
 
-def test_create_view_defaults_produce_empty_but_valid_state(_api):
+def test_create_view_never_hides_fields(_api):
+    # create_view has no row_fields/col_fields whitelist -- there's no "hide
+    # a field" concept exposed over MCP, only pinning (reorder) and the
+    # GUI-only per-file field delete. Every view always carries every field.
     result = mcp_server.create_view(name="empty view")
-    assert result["rowFields"] == []
-    assert result["colFields"] == []
+    assert result["rowFields"] == ["taxonomy"]
+    assert result["colFields"] == ["age", "diagnosis"]
     assert result["pinnedObs"] == []
     assert result["pinnedColFields"] == []
     assert result["axisState"]["observation"]["sortDir"] == 0
