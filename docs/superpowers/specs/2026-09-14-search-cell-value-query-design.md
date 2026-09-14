@@ -84,18 +84,23 @@ not textual.
 
 ### Jump-to-cell
 
-Add a `dataCell` branch to `jumpTo()` (`web_script.py:1003`):
+This behaves exactly like clicking any other search result today — no new
+click/jump mechanism is being introduced. The existing jump logic already
+has two building blocks, each used by a different result type:
 
-1. `setMode('data')`
-2. Resolve the row via `selectObservationRow(entry.rowRaw)` (handles the
-   pinned-row special case the same way existing row jumps do).
-3. Resolve the column via `resolveAxisPosition('sample', entry.colRaw)`,
-   mirroring the existing `colValue` branch (`web_script.py:1034-1039`),
-   setting `colPage` as needed.
-4. Set `selR`/`selC` to the resolved positions.
-5. Call `showSelected()` with the same label/value format the direct-click
-   handler already uses (`web_script.py:1417`), so the end state is
-   identical to a manual click on that cell.
+- `selectObservationRow(rawIdx)` — used by taxon/row results to select a row.
+- `resolveAxisPosition('sample', rawIdx)` — used by sample/column results
+  (including the existing `colValue` branch, `web_script.py:1034-1039`) to
+  select a column.
+
+A taxon result only needs the first; a sample result only needs the second.
+A data-cell result is the only case that needs *both*, since a cell is the
+intersection of a row and a column. So the new `dataCell` branch in
+`jumpTo()` (`web_script.py:1003`) just calls both existing helpers instead
+of one, sets `mode='data'`, and finishes with the same `showSelected()` call
+every click (search result or direct grid click) already ends with. There's
+no new selection/highlight/detail-panel logic — the outcome is identical to
+clicking the cell directly, because it reuses the identical final step.
 
 ### Discoverability
 
