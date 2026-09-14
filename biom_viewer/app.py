@@ -110,6 +110,63 @@ def _axis_summary(vec, total):
     return summary
 
 
+_CELL_OPS = {
+    "<": lambda v, t: v < t,
+    "<=": lambda v, t: v <= t,
+    ">": lambda v, t: v > t,
+    ">=": lambda v, t: v >= t,
+    "=": lambda v, t: v == t,
+}
+
+
+def _cell_matches(table, op, threshold, cap=200):
+    """Numeric comparator search over the abundance matrix (search box "<1",
+    ">=0.5", "=0" queries). Scans only the sparse matrix's stored (nonzero)
+    entries -- never densifies the full table (see CONTRIBUTING.md) -- plus,
+    when the comparator also matches the implicit zero value shared by every
+    unstored cell, a lazily-enumerated sample of zero cells just large enough
+    to fill out the results up to `cap`. Zero matches are appended after the
+    sorted nonzero ones: for non-negative abundance data (the normal case)
+    zero is the smallest possible value, so it always belongs at the tail of
+    a descending sort regardless of operator; a negative `threshold` against
+    non-negative data is an edge case this doesn't sort perfectly for, but is
+    not a realistic query for an abundance table.
+    """
+    pred = _CELL_OPS[op]
+    coo = table.matrix_data.tocoo()
+    # biom.Table always backs matrix_data with float64, same as data_window's
+    # toarray().tolist() (what a direct grid click's value comes from), so
+    # plain float() here matches that path -- no dtype-preservation needed.
+    nz = [
+        (int(r), int(c), float(v))
+        for r, c, v in zip(coo.row, coo.col, coo.data)
+        if pred(float(v), threshold)
+    ]
+    if op != "=":
+        nz.sort(key=lambda m: m[2], reverse=True)
+
+    rows, cols = table.shape
+    total_cells = rows * cols
+    zero_matches = pred(0.0, threshold)
+    zero_total = (total_cells - coo.nnz) if zero_matches else 0
+
+    result = nz[:cap]
+    remaining = cap - len(result)
+    if zero_matches and remaining > 0 and zero_total > 0:
+        occupied = set(zip(coo.row.tolist(), coo.col.tolist()))
+        for r in range(rows):
+            if remaining <= 0:
+                break
+            for c in range(cols):
+                if (r, c) not in occupied:
+                    result.append((r, c, 0.0))
+                    remaining -= 1
+                    if remaining <= 0:
+                        break
+
+    return {"matches": result, "total": len(nz) + zero_total}
+
+
 def _is_numeric(v):
     if isinstance(v, bool):
         return False
@@ -566,6 +623,9 @@ class Api:
 
     def field_summary(self, axis, field, idxs=None):
         return field_summary(self._table, axis, field, idxs)
+
+    def cell_matches(self, op, threshold, cap=200):
+        return _cell_matches(self._table, op, threshold, cap)
 
     def load_workspace(self) -> dict:
         return self._workspace_store.load_workspace(self._identity).to_payload()
