@@ -392,7 +392,13 @@ function viewStatePayload(v){
   ['observation','sample'].forEach(axis=>{
     if(!axisState[axis].columnSets) axisState[axis].columnSets = [];
   });
-  return {mode: v.mode, axisState, rowFields: v.rowFields, colFields: v.colFields,
+  // Reconciled the same way applyViewState() reconciles rowFields/colFields --
+  // otherwise a view whose saved field list predates a field added to the
+  // live session compares unequal to itself right after being applied, and
+  // falsely shows the unsaved-changes dot the instant you switch to it.
+  return {mode: v.mode, axisState,
+    rowFields: reconcileFields(v.rowFields, allRowFields, axisState.observation.deletedFields),
+    colFields: reconcileFields(v.colFields, allColFields, axisState.sample.deletedFields),
     pinnedObs: [...v.pinnedObs].sort((a,b)=>a-b), pinnedColFields: [...v.pinnedColFields].sort()};
 }
 
