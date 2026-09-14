@@ -133,6 +133,7 @@ STYLE = """
              border:1px solid var(--input-border);border-radius:var(--radius-sm);padding:5px 9px;font-size:12.5px;outline:none;
              transition:border-color var(--dur) var(--ease)}
   #searchBox:focus{border-color:var(--sel-outline)}
+  #searchHelp{padding:4px 8px;font-size:11.5px;color:var(--dim);font-weight:700}
   /* The pin only means anything while results are on screen. Parked in the
      toolbar as a bare 40%-opacity emoji it was the least legible control in
      the app -- unlabelled, and at that opacity it read as *disabled* rather
