@@ -193,15 +193,18 @@ STYLE = """
   #copiedBadge.on{opacity:1}
   #expandBtn{flex:none;margin-right:3px}
   button.nav,button.tool{background:var(--panel-bg);color:var(--fg);border:1px solid var(--input-border);border-radius:var(--radius-sm);padding:4px 10px;cursor:pointer;
-             font-size:14px;line-height:1;transition:background var(--dur) var(--ease),border-color var(--dur) var(--ease)}
+             font-size:14px;line-height:1;min-width:28px;min-height:28px;transition:background var(--dur) var(--ease),border-color var(--dur) var(--ease)}
   button.nav:hover:not(:disabled),button.tool:hover{background:var(--hl);border-color:var(--sel-outline)}
   button.nav:active:not(:disabled),button.tool:active{transform:translateY(.5px)}
   button.nav:disabled{opacity:.35;cursor:default}
+  button.nav-rot{transform:rotate(90deg)}
+  button.nav-rot:active:not(:disabled){transform:rotate(90deg) translateY(.5px)}
   /* Small corner dot rather than the old inline "●" glyph -- the rail icon
      is a fixed 24px square with no text run to put a glyph inside anymore. */
   #viewsBtn.views-dirty::after{content:'';position:absolute;top:3px;right:3px;width:5px;height:5px;
              border-radius:50%;background:var(--row-meta)}
-  #viewsBtn{position:relative}
+  #viewsBtn{position:relative;max-width:380px;flex-shrink:0}
+  #viewsBtn.views-flash{background:var(--accent);border-color:var(--accent);color:#fff}
   /* Deliberately no color for the plain "a view is active" state -- the
      tooltip already says that. Color is reserved for the one state that
      needs it (unsaved changes), so it isn't fighting the green used

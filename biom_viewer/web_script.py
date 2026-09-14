@@ -255,6 +255,12 @@ function computeFit(){
 
 let mode='data'; // 'data' | 'row' (observation metadata) | 'col' (sample metadata)
 let rowFields=[], colFields=[];
+// The true field set for the file as currently loaded (fieldUnion over its
+// metadata), captured once in loadMeta. A saved view's rowFields/colFields
+// can predate a field that was added to the file since the view was saved
+// (e.g. a pipeline rerun added a new metadata column) -- applyViewState
+// reconciles against these so newly-appeared fields aren't silently hidden.
+let allRowFields=[], allColFields=[];
 
 // Sort/filter state lives per underlying axis identity (observation, sample),
 // not per mode -- a filter set while viewing row-metadata mode still applies
@@ -348,8 +354,8 @@ function applyViewState(vs){
   ['observation','sample'].forEach(axis=>{
     if(!axisState[axis].columnSets) axisState[axis].columnSets = [];
   });
-  rowFields = vs.rowFields.slice();
-  colFields = vs.colFields.slice();
+  rowFields = reconcileFields(vs.rowFields, allRowFields, axisState.observation.deletedFields);
+  colFields = reconcileFields(vs.colFields, allColFields, axisState.sample.deletedFields);
   pinnedObs = new Set(vs.pinnedObs);
   pinnedColFields = new Set(vs.pinnedColFields);
   recomputeVisible('observation');
@@ -491,6 +497,17 @@ function fieldUnion(metaArr){
   return out;
 }
 
+// Saved field order/subset plus any field that exists in the current data
+// but not in that saved list -- skipping ones the user explicitly deleted.
+// Keeps a stale saved view from hiding a field added to the file after save.
+function reconcileFields(saved, current, deleted){
+  const out = saved.slice();
+  const have = new Set(out);
+  const gone = new Set(deleted || []);
+  current.forEach(f=>{ if(!have.has(f) && !gone.has(f)){ have.add(f); out.push(f); } });
+  return out;
+}
+
 let savedViews = [];
 let lastAppliedViewName = null;
 let lastLoadedViewState = null;
@@ -509,6 +526,8 @@ async function loadMeta(){
     valueMax = meta.value_max ?? null;
     rowFields = fieldUnion(meta.row_metadata);
     colFields = fieldUnion(meta.col_metadata);
+    allRowFields = rowFields.slice();
+    allColFields = colFields.slice();
     // Split into the directory (de-emphasized -- context, not the point)
     // and the basename (the actual document identity, kept prominent) --
     // showing the whole absolute path at equal weight read as an
@@ -572,6 +591,8 @@ function colFieldAt(i){ return colFieldsForPaging()[i]; }
 // column axis (sample ids) stays exactly as in 'data' mode.
 function rowsTotal(){ return mode==='col' ? colFieldsForPaging().length : (visObs ? visObs.length : meta.rows); }
 function colsTotal(){ return mode==='row' ? rowFields.length : (visSample ? visSample.length : meta.cols); }
+function maxRowPage(){ return Math.max(0, Math.ceil(rowsTotal()/rowsPerPage()) - 1); }
+function maxColPage(){ return Math.max(0, Math.ceil(colsTotal()/colsPerPage()) - 1); }
 function fieldDisplay(axis, field){ return axisState[axis].renames[field] || field; }
 function rowLabel(i){ return mode==='col' ? fieldDisplay('sample', colFieldAt(i)) : meta.row_ids[obsAt(i)]; }
 function colLabel(j){ return mode==='row' ? fieldDisplay('observation', rowFields[j]) : meta.col_ids[sampleAt(j)]; }
@@ -1035,6 +1056,10 @@ async function render(){
   document.getElementById('rowDown').disabled = r1>=rowsTotal();
   document.getElementById('colPrev').disabled = colPage===0;
   document.getElementById('colNext').disabled = c1>=colsTotal();
+  document.getElementById('rowStart').disabled = rowPage===0;
+  document.getElementById('rowEnd').disabled = r1>=rowsTotal();
+  document.getElementById('colStart').disabled = colPage===0;
+  document.getElementById('colEnd').disabled = c1>=colsTotal();
 
   // A filter can legitimately match nothing, and the grid had no answer for
   // it: gridTemplateColumns became `repeat(0, 130px)`, which is invalid CSS,
@@ -3070,6 +3095,10 @@ document.getElementById('rowUp').onclick = ()=>{ rowPage--; render(); };
 document.getElementById('rowDown').onclick = ()=>{ rowPage++; render(); };
 document.getElementById('colPrev').onclick = ()=>{ colPage--; render(); };
 document.getElementById('colNext').onclick = ()=>{ colPage++; render(); };
+document.getElementById('rowStart').onclick = ()=>{ rowPage = 0; render(); };
+document.getElementById('rowEnd').onclick = ()=>{ rowPage = maxRowPage(); render(); };
+document.getElementById('colStart').onclick = ()=>{ colPage = 0; render(); };
+document.getElementById('colEnd').onclick = ()=>{ colPage = maxColPage(); render(); };
 
 let resizeT=null;
 window.addEventListener('resize', ()=>{
@@ -3137,6 +3166,26 @@ document.addEventListener('keydown', (e)=>{
      && !document.querySelector('.wm-overlay.open')){
     e.preventDefault();
     moveSelection(...ARROW_DELTA[e.key]);
+    return;
+  }
+  // Home/End jump the column axis (horizontal scroll) to its first/last
+  // page; PageUp/PageDown step the row axis (vertical scroll) one page at a
+  // time. Shift flips each pair to the other axis's equivalent action --
+  // Shift+Home/End jumps the row axis all the way, Shift+PageUp/PageDown
+  // steps the column axis one page -- so every combination of "jump vs.
+  // step" x "row vs. column" is reachable. Same guard as the arrow keys so
+  // typing in a field or an open popover isn't hijacked.
+  const PAGE_NAV_KEYS = {Home:1, End:1, PageUp:1, PageDown:1};
+  if(!mod && !e.altKey && PAGE_NAV_KEYS[e.key] && meta
+     && !/^(INPUT|TEXTAREA|SELECT)$/.test((document.activeElement||{}).tagName||'')
+     && !document.getElementById('ctxMenu') && !document.getElementById('filterPopover')
+     && !document.getElementById('viewsPopover') && !document.getElementById('confirmPopover')
+     && !document.querySelector('.wm-overlay.open')){
+    e.preventDefault();
+    const targetId = e.shiftKey
+      ? {Home:'rowStart', End:'rowEnd', PageUp:'colPrev', PageDown:'colNext'}[e.key]
+      : {Home:'colStart', End:'colEnd', PageUp:'rowUp', PageDown:'rowDown'}[e.key];
+    document.getElementById(targetId).click();
     return;
   }
   if(mod){
