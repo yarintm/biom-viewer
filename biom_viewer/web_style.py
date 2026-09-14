@@ -255,6 +255,19 @@ STYLE = """
      holds metadata *field names* (English text), which read better with
      normal end-truncation. */
   body.mode-data .rh,body.mode-row .rh{direction:rtl;text-align:left}
+  /* An expanded stat cell (.rh-stats, added onto this same .rh element) has
+     flex rows of its own -- the histogram and the top-values bars -- and
+     flex layout direction is direction-relative too, so the rtl above was
+     silently mirroring both, bucket/rank order intact in the DOM (and in
+     each bar's hover tooltip) but backwards on screen. A plain .rh-stats{
+     direction:ltr} rule doesn't actually win here: two classes beat one on
+     specificity regardless of source order, confirmed in headless Chrome
+     (.rh-stats computed to rtl despite that rule) -- matching the .rh
+     selector's own specificity is what it takes. .rh-label keeps rtl (and
+     needs the same specificity bump) since it's the one piece that still
+     wants front-truncation. */
+  body.mode-data .rh.rh-stats,body.mode-row .rh.rh-stats{direction:ltr}
+  body.mode-data .rh.rh-stats .rh-label,body.mode-row .rh.rh-stats .rh-label{direction:rtl;text-align:left}
   /* A frozen-pane divider is structure, not state -- it was drawn in the
      accent green that everywhere else means "selected", so the pinned block
      read as though it were highlighted. Excel draws this line in plain
@@ -559,6 +572,8 @@ STYLE = """
              padding:4px 6px;display:flex;flex-direction:column;gap:3px;overflow:hidden;cursor:pointer;min-height:0}
   .rh-stats{white-space:normal}
   .rh-stats:hover{background:var(--panel-bg)}
+  /* direction is set by the body.mode-* rules above .rh, not here -- see
+     that comment for why. */
   .rh-stats .rh-label{font-size:var(--fs);font-weight:700;color:var(--hdr-fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
              background:var(--hdr-bg);margin:-4px -6px 4px;padding:4px 6px;cursor:pointer;flex-shrink:0}
   .rh-stats .rh-label:hover{background:var(--input-border)}

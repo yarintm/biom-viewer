@@ -40,7 +40,11 @@ let expandedFieldRow=null;
 // needs a name-keyed twin instead of a position index. Mutually exclusive
 // with expandedFieldRow -- only one field row is ever expanded at a time.
 let expandedPinnedField=null;
-function anyFieldRowExpanded(){ return stripOnRows() || expandedFieldRow!=null || expandedPinnedField!=null; }
+// Same idea, one identity space over: a pinned observation (data/row mode's
+// frozen block, not col mode's) also lives outside expandedFieldRow's paged
+// position space, so it needs its own raw-index-keyed twin too.
+let expandedPinnedRaw=null;
+function anyFieldRowExpanded(){ return stripOnRows() || expandedFieldRow!=null || expandedPinnedField!=null || expandedPinnedRaw!=null; }
 // Expanding/collapsing a row changes rowsPerPage() (the expanded row eats
 // extra height budget), which shifts which fields "page N" covers -- so the
 // clicked row can silently scroll off the page it was just clicked on.
@@ -49,6 +53,7 @@ function anyFieldRowExpanded(){ return stripOnRows() || expandedFieldRow!=null |
 function toggleFieldRow(r){
   expandedFieldRow = (expandedFieldRow===r) ? null : r;
   expandedPinnedField = null;
+  expandedPinnedRaw = null;
   summaryAll = false;
   computeFit();
   const maxPage = Math.max(0, Math.ceil(rowsTotal()/rowsPerPage()) - 1);
@@ -61,6 +66,19 @@ function toggleFieldRow(r){
 function toggleFieldRowPinned(field){
   expandedPinnedField = (expandedPinnedField===field) ? null : field;
   expandedFieldRow = null;
+  expandedPinnedRaw = null;
+  computeFit();
+  const maxPage = Math.max(0, Math.ceil(rowsTotal()/rowsPerPage()) - 1);
+  rowPage = Math.min(rowPage, maxPage);
+  render();
+}
+// Same as toggleFieldRowPinned, but for a pinned observation (data/row
+// mode's frozen block) -- this is the case that was missing a double-click
+// handler entirely, so pinning a row silently made its summary unreachable.
+function toggleFieldRowPinnedRaw(rawIdx){
+  expandedPinnedRaw = (expandedPinnedRaw===rawIdx) ? null : rawIdx;
+  expandedFieldRow = null;
+  expandedPinnedField = null;
   computeFit();
   const maxPage = Math.max(0, Math.ceil(rowsTotal()/rowsPerPage()) - 1);
   rowPage = Math.min(rowPage, maxPage);
@@ -177,7 +195,7 @@ function toggleSummaryAll(centerRow){
   summaryAll = !summaryAll;
   // The two are alternative answers to the same question, so turning on the
   // broad one clears the narrow one rather than stacking two stat tracks.
-  if(summaryAll){ expandedFieldRow = null; expandedPinnedField = null; }
+  if(summaryAll){ expandedFieldRow = null; expandedPinnedField = null; expandedPinnedRaw = null; }
   computeFit();
   const maxPage = Math.max(0, Math.ceil(rowsTotal()/rowsPerPage()) - 1);
   rowPage = centerRow!==undefined ? Math.floor(centerRow/rowsPerPage()) : Math.min(rowPage, maxPage);
@@ -219,7 +237,7 @@ function computeFit(){
     // Frozen fields are never the expanded one (see colFieldsForPaging),
     // so they always cost one short track each here.
     autoRows = Math.max(1, Math.floor((availH - shortRowH - statRowH()) / shortRowH) + 1 - pinnedCount);
-  } else if(mode==='col' && expandedPinnedField!=null){
+  } else if((mode==='col' && expandedPinnedField!=null) || expandedPinnedRaw!=null){
     // Same idea, but the expanded row is in the frozen block instead of the
     // paged rows -- the paged rows stay at their normal short cost, only
     // the frozen block's extra height (statRowH() over its usual shortRowH)
@@ -478,7 +496,7 @@ function setMode(m){
   // sample column" in data mode and "every field row" in 'col' mode, so
   // carrying it across a switch turns a band the user asked for on one axis
   // into an unasked-for explosion on the other.
-  expandedFieldRow = null; expandedPinnedField = null; summaryAll = false;
+  expandedFieldRow = null; expandedPinnedField = null; expandedPinnedRaw = null; summaryAll = false;
   modeBtns.forEach(x=>x.classList.toggle('active', x.dataset.m===m));
   document.body.className = 'mode-'+m;
   document.getElementById('modeTag').textContent =
@@ -1027,7 +1045,19 @@ async function jumpTo(entry){
   showSelected(label);
 }
 
+// render() awaits several pywebview API round-trips before it ever touches
+// the DOM (data/stat fetches below). Nothing stopped a second render() --
+// triggered by another toggle while the first was still in flight -- from
+// finishing first and getting overwritten by the first call's now-stale
+// fetch results once *it* finally resolved: e.g. double-click a pinned row's
+// summary open, then closed, and the closed state's render loses the race,
+// leaving a expanded stat block on screen for a row that's no longer
+// expanded. renderGen makes every render() check, right before it commits
+// anything to the DOM, that it's still the most recent call -- stale ones
+// bail out instead of painting over what a newer render already drew.
+let renderGen = 0;
 async function render(){
+  const myGen = ++renderGen;
   computeFit();
   const [r0,r1] = pageBounds(rowPage, rowsPerPage(), rowsTotal());
   const [c0,c1] = pageBounds(colPage, colsPerPage(), colsTotal());
@@ -1177,15 +1207,23 @@ async function render(){
   const pinnedFieldExpandedStat = (expandedPinnedField!=null && !stripOnRows())
     ? await window.pywebview.api.field_summary('sample', expandedPinnedField, visSample)
     : null;
+  const pinnedObsExpandedStat = expandedPinnedRaw!=null
+    ? await window.pywebview.api.row_summary(expandedPinnedRaw, visSample)
+    : null;
 
   const grid = document.getElementById('grid');
   const statRowTrack = stripOnCols() ? `${statRowH()}px ` : '';
   const pinnedFieldRowH = stripOnRows() ? statRowH() : shortRowHPx();
-  const pinnedTrack = pinnedRaw.length ? `repeat(${pinnedRaw.length}, ${shortRowHPx()}px) `
+  const pinnedTrack = pinnedRaw.length
+    ? pinnedRaw.map(rawIdx => `${rawIdx===expandedPinnedRaw ? statRowH() : shortRowHPx()}px`).join(' ') + ' '
     : pinnedFieldsOrdered.length
       ? pinnedFieldsOrdered.map(f => `${f===expandedPinnedField ? statRowH() : pinnedFieldRowH}px`).join(' ') + ' '
       : '';
   const rowsTrack = rowHeights ? rowHeights.map(h=>`${h}px`).join(' ') : `repeat(${renderedRows}, ${rowHPx}px)`;
+  // A newer render() started (and will paint) while this one was still
+  // awaiting its fetches above -- let that one win instead of overwriting
+  // it with what's now a stale answer.
+  if(myGen !== renderGen) return;
   // Clearing the filter that emptied the grid has to put display:grid back;
   // otherwise the recovered table renders through the empty state's flex
   // layout and every cell lands in one row.
@@ -1238,7 +1276,13 @@ async function render(){
     const isLast = pi === pinnedRaw.length - 1;
     const rh = document.createElement('div');
     rh.className = 'cell rh' + (isLast ? ' pin-last' : '');
-    rh.textContent = label;
+    if(rawIdx===expandedPinnedRaw){
+      rh.classList.add('rh-stats');
+      rh.innerHTML = `<div class="stat-line rh-label">${escapeHtml(label)}</div>` + statCellHtml(pinnedObsExpandedStat);
+      wireStatOther(rh, pinnedObsExpandedStat, label);
+    } else {
+      rh.textContent = label;
+    }
     rh.title = label;
     rh.dataset.pinnedRaw = rawIdx;
     rh.dataset.ctxPinRaw = rawIdx;
@@ -1247,6 +1291,7 @@ async function render(){
       showSelected(label);
       applyHighlight();
     });
+    rh.addEventListener('dblclick', ()=>{ toggleFieldRowPinnedRaw(rawIdx); });
     grid.appendChild(rh);
     for(let c=c0;c<c1;c++){
       const cell = document.createElement('div');
