@@ -3145,30 +3145,38 @@ document.getElementById('tagOverlay').addEventListener('click', (e)=>{
 // so reset just the axis whose meaning changed and keep your place on the other.
 const rowAxisKey = m => m==='col' ? 'fields' : 'ids';
 const colAxisKey = m => m==='row' ? 'fields' : 'ids';
-// rowPage means two unrelated things depending on rowAxisKey: a position in
-// the observation list ('ids', shared by data/row mode) or a position in
-// colFieldsForPaging() ('fields', 'col' mode only). Swapping axis used to
-// just zero rowPage, so a data-mode page > 1 was silently lost the moment
-// you visited Sample metadata and came back -- 'col' mode never touches the
-// observation axis, so there was no reason to forget it. Remember each
-// axis's own position instead and restore it when that axis comes back.
+// rowPage/colPage each mean two unrelated things depending on rowAxisKey/
+// colAxisKey: a position in the observation or sample id list ('ids'), or a
+// position in colFieldsForPaging()/rowFields ('fields', field-listing modes
+// only). Swapping either axis used to just zero its page, so a data-mode
+// page > 1 on either axis was silently lost the moment you visited the
+// *other* metadata mode and came back -- 'col' mode never touches the
+// observation axis, and 'row' mode never touches the sample axis, so there
+// was no reason to forget either. Remember each axis's own position instead
+// and restore it when that axis comes back.
 let rowPageByAxis = { ids: 0, fields: 0 };
+let colPageByAxis = { ids: 0, fields: 0 };
 modeBtns.forEach(b=>b.onclick = ()=>{
   const m = b.dataset.m;
   const rowAxisChanged = rowAxisKey(m)!==rowAxisKey(mode);
+  const colAxisChanged = colAxisKey(m)!==colAxisKey(mode);
   if(rowAxisChanged){
     rowPageByAxis[rowAxisKey(mode)] = rowPage;
     selR = null; selPinnedRaw = null; selPinnedField = null;
   }
-  if(colAxisKey(m)!==colAxisKey(mode)){ colPage = 0; selC = null; }
+  if(colAxisChanged){
+    colPageByAxis[colAxisKey(mode)] = colPage;
+    selC = null;
+  }
   setMode(m);
-  if(rowAxisChanged){
-    // The field/observation count (and thus rowsPerPage()) can differ
+  if(rowAxisChanged || colAxisChanged){
+    // The field/id count (and thus rowsPerPage()/colsPerPage()) can differ
     // between axes, so the remembered page needs computeFit() run under the
     // new mode before it's safe to use -- same order toggleFieldRow already
     // uses for the same reason.
     computeFit();
-    rowPage = Math.min(rowPageByAxis[rowAxisKey(m)] || 0, maxRowPage());
+    if(rowAxisChanged) rowPage = Math.min(rowPageByAxis[rowAxisKey(m)] || 0, maxRowPage());
+    if(colAxisChanged) colPage = Math.min(colPageByAxis[colAxisKey(m)] || 0, maxColPage());
   }
   render();
 });
