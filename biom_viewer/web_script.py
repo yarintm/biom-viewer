@@ -3160,6 +3160,21 @@ modeBtns.forEach(b=>b.onclick = ()=>{
   const m = b.dataset.m;
   const rowAxisChanged = rowAxisKey(m)!==rowAxisKey(mode);
   const colAxisChanged = colAxisKey(m)!==colAxisKey(mode);
+  // colsPerPage()/rowsPerPage() aren't fixed per axis -- they depend on the
+  // row-header width, which differs by mode even when the axis itself is
+  // unchanged (data <-> col both page over the same sample list, but a
+  // 5-character OTU id vs. a long field name like
+  // "geo_loc_name_country_continent_calc" don't need the same header
+  // width). Keeping the same page *number* across the switch looked like
+  // the simplest fix, but a 1-sample-per-page difference compounds with the
+  // page number itself: at page 47 it turned "samples 612-624" into
+  // "samples 565-576" -- a world away, on a real file, not a hypothetical.
+  // Anchor on the actual first-visible raw index instead, captured under
+  // the OLD mode's own colsPerPage()/rowsPerPage(), and re-derive the page
+  // number under the new mode's fit so the item you were just looking at
+  // stays in view.
+  const rowAnchor = rowPage * rowsPerPage();
+  const colAnchor = colPage * colsPerPage();
   if(rowAxisChanged){
     rowPageByAxis[rowAxisKey(mode)] = rowPage;
     selR = null; selPinnedRaw = null; selPinnedField = null;
@@ -3169,15 +3184,16 @@ modeBtns.forEach(b=>b.onclick = ()=>{
     selC = null;
   }
   setMode(m);
-  if(rowAxisChanged || colAxisChanged){
-    // The field/id count (and thus rowsPerPage()/colsPerPage()) can differ
-    // between axes, so the remembered page needs computeFit() run under the
-    // new mode before it's safe to use -- same order toggleFieldRow already
-    // uses for the same reason.
-    computeFit();
-    if(rowAxisChanged) rowPage = Math.min(rowPageByAxis[rowAxisKey(m)] || 0, maxRowPage());
-    if(colAxisChanged) colPage = Math.min(colPageByAxis[colAxisKey(m)] || 0, maxColPage());
-  }
+  // Always recompute under the new mode's own fit -- same order
+  // toggleFieldRow already uses for the same reason (rowsPerPage()/
+  // colsPerPage() aren't safe to read until computeFit() has run for m).
+  computeFit();
+  rowPage = rowAxisChanged
+    ? Math.min(rowPageByAxis[rowAxisKey(m)] || 0, maxRowPage())
+    : Math.min(Math.floor(rowAnchor / rowsPerPage()), maxRowPage());
+  colPage = colAxisChanged
+    ? Math.min(colPageByAxis[colAxisKey(m)] || 0, maxColPage())
+    : Math.min(Math.floor(colAnchor / colsPerPage()), maxColPage());
   render();
 });
 
@@ -3254,7 +3270,17 @@ document.getElementById('colEnd').onclick = ()=>{ colPage = maxColPage(); render
 let resizeT=null;
 window.addEventListener('resize', ()=>{
   clearTimeout(resizeT);
-  resizeT = setTimeout(()=>{ rowPage=0; colPage=0; render(); }, 150);
+  // Resizing changes rowsPerPage()/colsPerPage(), but not which page you
+  // were on -- clamp against the new fit instead of jumping back to page 1
+  // every time the window changes size, the same way every other spot that
+  // recomputes fit (toggleFieldRowPinned etc.) already clamps rather than
+  // resets.
+  resizeT = setTimeout(()=>{
+    computeFit();
+    rowPage = Math.min(rowPage, maxRowPage());
+    colPage = Math.min(colPage, maxColPage());
+    render();
+  }, 150);
 });
 
 const systemDark = window.matchMedia('(prefers-color-scheme: dark)');
