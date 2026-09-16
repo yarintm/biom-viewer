@@ -1390,6 +1390,14 @@ async function render(){
     const isLast = pi === pinnedFieldsOrdered.length - 1;
     const rh = document.createElement('div');
     rh.className = 'cell rh' + (isLast ? ' pin-last' : '');
+    // Set regardless of which branch below renders the cell's content --
+    // it's always a sample-axis field here, stats-expanded or not, and the
+    // context menu (headerContextItems) needs it either way. This used to
+    // live only in the plain-label branch, so right-clicking a header whose
+    // summary was expanded found no ctx* dataset and fell back to a bogus
+    // "Search Google for <stats text>" item instead of the real menu.
+    rh.dataset.ctxAxis = 'sample';
+    rh.dataset.ctxField = field;
     if(stripOnRows()){
       rh.classList.add('rh-stats');
       rh.innerHTML = `<div class="stat-line rh-label">${escapeHtml(label)}</div>` + statCellHtml(pinnedFieldStats[pi]);
@@ -1400,8 +1408,6 @@ async function render(){
       wireStatOther(rh, pinnedFieldExpandedStat, label);
     } else {
       rh.textContent = label;
-      rh.dataset.ctxAxis = 'sample';
-      rh.dataset.ctxField = field;
     }
     rh.title = label;
     rh.dataset.pinnedField = field;
@@ -1433,6 +1439,20 @@ async function render(){
     const label = rowLabel(r);
     const rh = document.createElement('div');
     rh.className = 'cell rh';
+    // Set regardless of which branch below renders the cell's content: a
+    // row header is a metadata field in 'col' mode, an observation
+    // everywhere else, whether or not its summary is expanded. This used to
+    // live only in the plain-label branches, so right-clicking a header
+    // whose summary was expanded found no ctx* dataset and fell back to a
+    // bogus "Search Google for <stats text>" item instead of the real menu.
+    if(mode==='col'){
+      const field = colFieldAt(r);
+      rh.dataset.ctxAxis = 'sample';
+      rh.dataset.ctxField = field;
+      rh.dataset.ctxPinField = field;
+    } else {
+      rh.dataset.ctxPinRaw = obsAt(r);
+    }
     if(stripOnRows()){
       rh.classList.add('rh-stats');
       rh.innerHTML = `<div class="stat-line rh-label">${escapeHtml(label)}</div>` + statCellHtml(rowStats[r-r0]);
@@ -1441,15 +1461,8 @@ async function render(){
       rh.classList.add('rh-stats');
       rh.innerHTML = `<div class="stat-line rh-label">${escapeHtml(label)}</div>` + statCellHtml(fieldExpandedStat);
       wireStatOther(rh, fieldExpandedStat, label);
-    } else if(mode==='col'){
-      const field = colFieldAt(r);
-      rh.textContent = label;
-      rh.dataset.ctxAxis = 'sample';
-      rh.dataset.ctxField = field;
-      rh.dataset.ctxPinField = field;
     } else {
       rh.textContent = label;
-      rh.dataset.ctxPinRaw = obsAt(r);
     }
     rh.title = label;
     rh.dataset.r = r;
@@ -2833,7 +2846,13 @@ document.addEventListener('contextmenu', (e)=>{
 
   const sel = window.getSelection().toString().trim();
   const cellEl = e.target.closest('.cell, .wm-row, #cellBlock, #codeBlock, #selected');
-  const fallback = cellEl ? (cellEl.value !== undefined ? cellEl.value : cellEl.textContent).trim() : '';
+  // A header whose summary panel is expanded (.rh-stats) has its stat lines
+  // (Missing/Distinct/histogram) inside the same cell as the label -- so a
+  // plain textContent read would search for the whole blob concatenated
+  // together instead of just the field/row name. .rh-label holds only that
+  // name; fall back to the full text for every other kind of cell.
+  const statLabelEl = cellEl && cellEl.classList.contains('rh-stats') ? cellEl.querySelector('.rh-label') : null;
+  const fallback = cellEl ? (cellEl.value !== undefined ? cellEl.value : (statLabelEl || cellEl).textContent).trim() : '';
   const text = sel || fallback;
   if(!headerItems.length && !text) return; // nothing relevant under the cursor -- let the native menu show
   e.preventDefault();
