@@ -1396,6 +1396,14 @@ async function render(){
     const isLast = pi === pinnedFieldsOrdered.length - 1;
     const rh = document.createElement('div');
     rh.className = 'cell rh' + (isLast ? ' pin-last' : '');
+    // Set regardless of which branch below renders the cell's content --
+    // it's always a sample-axis field here, stats-expanded or not, and the
+    // context menu (headerContextItems) needs it either way. This used to
+    // live only in the plain-label branch, so right-clicking a header whose
+    // summary was expanded found no ctx* dataset and fell back to a bogus
+    // "Search Google for <stats text>" item instead of the real menu.
+    rh.dataset.ctxAxis = 'sample';
+    rh.dataset.ctxField = field;
     if(stripOnRows()){
       rh.classList.add('rh-stats');
       rh.innerHTML = `<div class="stat-line rh-label">${escapeHtml(label)}</div>` + statCellHtml(pinnedFieldStats[pi]);
@@ -1406,8 +1414,6 @@ async function render(){
       wireStatOther(rh, pinnedFieldExpandedStat, label);
     } else {
       rh.textContent = label;
-      rh.dataset.ctxAxis = 'sample';
-      rh.dataset.ctxField = field;
     }
     rh.title = label;
     rh.dataset.pinnedField = field;
@@ -1439,6 +1445,20 @@ async function render(){
     const label = rowLabel(r);
     const rh = document.createElement('div');
     rh.className = 'cell rh';
+    // Set regardless of which branch below renders the cell's content: a
+    // row header is a metadata field in 'col' mode, an observation
+    // everywhere else, whether or not its summary is expanded. This used to
+    // live only in the plain-label branches, so right-clicking a header
+    // whose summary was expanded found no ctx* dataset and fell back to a
+    // bogus "Search Google for <stats text>" item instead of the real menu.
+    if(mode==='col'){
+      const field = colFieldAt(r);
+      rh.dataset.ctxAxis = 'sample';
+      rh.dataset.ctxField = field;
+      rh.dataset.ctxPinField = field;
+    } else {
+      rh.dataset.ctxPinRaw = obsAt(r);
+    }
     if(stripOnRows()){
       rh.classList.add('rh-stats');
       rh.innerHTML = `<div class="stat-line rh-label">${escapeHtml(label)}</div>` + statCellHtml(rowStats[r-r0]);
@@ -1447,15 +1467,8 @@ async function render(){
       rh.classList.add('rh-stats');
       rh.innerHTML = `<div class="stat-line rh-label">${escapeHtml(label)}</div>` + statCellHtml(fieldExpandedStat);
       wireStatOther(rh, fieldExpandedStat, label);
-    } else if(mode==='col'){
-      const field = colFieldAt(r);
-      rh.textContent = label;
-      rh.dataset.ctxAxis = 'sample';
-      rh.dataset.ctxField = field;
-      rh.dataset.ctxPinField = field;
     } else {
       rh.textContent = label;
-      rh.dataset.ctxPinRaw = obsAt(r);
     }
     rh.title = label;
     rh.dataset.r = r;
@@ -2839,7 +2852,13 @@ document.addEventListener('contextmenu', (e)=>{
 
   const sel = window.getSelection().toString().trim();
   const cellEl = e.target.closest('.cell, .wm-row, #cellBlock, #codeBlock, #selected');
-  const fallback = cellEl ? (cellEl.value !== undefined ? cellEl.value : cellEl.textContent).trim() : '';
+  // A header whose summary panel is expanded (.rh-stats) has its stat lines
+  // (Missing/Distinct/histogram) inside the same cell as the label -- so a
+  // plain textContent read would search for the whole blob concatenated
+  // together instead of just the field/row name. .rh-label holds only that
+  // name; fall back to the full text for every other kind of cell.
+  const statLabelEl = cellEl && cellEl.classList.contains('rh-stats') ? cellEl.querySelector('.rh-label') : null;
+  const fallback = cellEl ? (cellEl.value !== undefined ? cellEl.value : (statLabelEl || cellEl).textContent).trim() : '';
   const text = sel || fallback;
   if(!headerItems.length && !text) return; // nothing relevant under the cursor -- let the native menu show
   e.preventDefault();
@@ -3132,11 +3151,55 @@ document.getElementById('tagOverlay').addEventListener('click', (e)=>{
 // so reset just the axis whose meaning changed and keep your place on the other.
 const rowAxisKey = m => m==='col' ? 'fields' : 'ids';
 const colAxisKey = m => m==='row' ? 'fields' : 'ids';
+// rowPage/colPage each mean two unrelated things depending on rowAxisKey/
+// colAxisKey: a position in the observation or sample id list ('ids'), or a
+// position in colFieldsForPaging()/rowFields ('fields', field-listing modes
+// only). Swapping either axis used to just zero its page, so a data-mode
+// page > 1 on either axis was silently lost the moment you visited the
+// *other* metadata mode and came back -- 'col' mode never touches the
+// observation axis, and 'row' mode never touches the sample axis, so there
+// was no reason to forget either. Remember each axis's own position instead
+// and restore it when that axis comes back.
+let rowPageByAxis = { ids: 0, fields: 0 };
+let colPageByAxis = { ids: 0, fields: 0 };
 modeBtns.forEach(b=>b.onclick = ()=>{
   const m = b.dataset.m;
-  if(rowAxisKey(m)!==rowAxisKey(mode)){ rowPage = 0; selR = null; selPinnedRaw = null; selPinnedField = null; }
-  if(colAxisKey(m)!==colAxisKey(mode)){ colPage = 0; selC = null; }
+  const rowAxisChanged = rowAxisKey(m)!==rowAxisKey(mode);
+  const colAxisChanged = colAxisKey(m)!==colAxisKey(mode);
+  // colsPerPage()/rowsPerPage() aren't fixed per axis -- they depend on the
+  // row-header width, which differs by mode even when the axis itself is
+  // unchanged (data <-> col both page over the same sample list, but a
+  // 5-character OTU id vs. a long field name like
+  // "geo_loc_name_country_continent_calc" don't need the same header
+  // width). Keeping the same page *number* across the switch looked like
+  // the simplest fix, but a 1-sample-per-page difference compounds with the
+  // page number itself: at page 47 it turned "samples 612-624" into
+  // "samples 565-576" -- a world away, on a real file, not a hypothetical.
+  // Anchor on the actual first-visible raw index instead, captured under
+  // the OLD mode's own colsPerPage()/rowsPerPage(), and re-derive the page
+  // number under the new mode's fit so the item you were just looking at
+  // stays in view.
+  const rowAnchor = rowPage * rowsPerPage();
+  const colAnchor = colPage * colsPerPage();
+  if(rowAxisChanged){
+    rowPageByAxis[rowAxisKey(mode)] = rowPage;
+    selR = null; selPinnedRaw = null; selPinnedField = null;
+  }
+  if(colAxisChanged){
+    colPageByAxis[colAxisKey(mode)] = colPage;
+    selC = null;
+  }
   setMode(m);
+  // Always recompute under the new mode's own fit -- same order
+  // toggleFieldRow already uses for the same reason (rowsPerPage()/
+  // colsPerPage() aren't safe to read until computeFit() has run for m).
+  computeFit();
+  rowPage = rowAxisChanged
+    ? Math.min(rowPageByAxis[rowAxisKey(m)] || 0, maxRowPage())
+    : Math.min(Math.floor(rowAnchor / rowsPerPage()), maxRowPage());
+  colPage = colAxisChanged
+    ? Math.min(colPageByAxis[colAxisKey(m)] || 0, maxColPage())
+    : Math.min(Math.floor(colAnchor / colsPerPage()), maxColPage());
   render();
 });
 
@@ -3163,6 +3226,7 @@ searchBox.addEventListener('input', ()=>{
   clearTimeout(searchDebounce);
   searchDebounce = setTimeout(()=>runSearch(searchBox.value), 120);
 });
+document.getElementById('copyPathBtn').onclick = ()=> writeClipboard(meta.filename, 'file path');
 searchBox.addEventListener('keydown', (e)=>{
   const results = document.getElementById('searchResults');
   if(!results.classList.contains('open')) return;
@@ -3212,7 +3276,17 @@ document.getElementById('colEnd').onclick = ()=>{ colPage = maxColPage(); render
 let resizeT=null;
 window.addEventListener('resize', ()=>{
   clearTimeout(resizeT);
-  resizeT = setTimeout(()=>{ rowPage=0; colPage=0; render(); }, 150);
+  // Resizing changes rowsPerPage()/colsPerPage(), but not which page you
+  // were on -- clamp against the new fit instead of jumping back to page 1
+  // every time the window changes size, the same way every other spot that
+  // recomputes fit (toggleFieldRowPinned etc.) already clamps rather than
+  // resets.
+  resizeT = setTimeout(()=>{
+    computeFit();
+    rowPage = Math.min(rowPage, maxRowPage());
+    colPage = Math.min(colPage, maxColPage());
+    render();
+  }, 150);
 });
 
 const systemDark = window.matchMedia('(prefers-color-scheme: dark)');

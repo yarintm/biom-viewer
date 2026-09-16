@@ -26,6 +26,11 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest"]
+# Browser-driven UI regression tests (tests/test_ui_paging.py) -- drives the
+# system Chrome install via Playwright's channel="chrome", no browser
+# download needed. Separate from `dev` so the fast unit-test suite never
+# requires it; skipped automatically if not installed.
+ui = ["playwright"]
 
 [project.urls]
 Homepage = "https://github.com/yarintm/biom-viewer"

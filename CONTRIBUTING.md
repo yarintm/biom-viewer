@@ -17,6 +17,16 @@ pip install -e ".[dev]"
 pytest
 ```
 
+`tests/test_ui_paging.py` drives the real app UI (grid paging, mode
+switches, context menus) in a real browser via Playwright against your
+system Chrome install -- no browser download needed. It's skipped
+automatically unless you've installed it:
+
+```bash
+pip install -e ".[ui]"
+pytest tests/test_ui_paging.py
+```
+
 ## Design constraints worth knowing before you send a PR
 
 - **Never densify the full table.** All rendering must go through windowed
