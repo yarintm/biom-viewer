@@ -721,6 +721,7 @@ PAGE = """<!doctype html>
 <div id="info">
   <span style="display:flex;align-items:center;overflow:hidden">
     <span id="filename">loading…</span>
+    <button class="tool" id="copyPathBtn" type="button" aria-label="Copy file path" title="Copy full file path">⧉</button>
     <span id="dims"></span>
     <span id="modeTag"></span>
   </span>

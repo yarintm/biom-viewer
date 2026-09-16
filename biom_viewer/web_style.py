@@ -108,6 +108,9 @@ STYLE = """
      readable. */
   .file-dir{color:var(--dim);font-weight:400;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:0 100 auto;min-width:0}
   .file-base{color:var(--fg);font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:0 1 auto;min-width:0}
+  /* Sits right after the basename rather than in the toolbar -- it acts on
+     the path being read right there, not on the grid like the other tools. */
+  #copyPathBtn{flex-shrink:0;margin-left:6px;padding:2px 6px;font-size:12px;line-height:1}
   #dims{flex-shrink:0;white-space:nowrap;margin-left:10px;color:var(--dim);font-size:11.5px;font-family:ui-monospace,monospace;
              background:var(--panel-bg);border:1px solid var(--border);border-radius:10px;padding:2px 8px}
   /* Below this the top row can't hold the path, the dimensions pill, the

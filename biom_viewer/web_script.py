@@ -3204,6 +3204,7 @@ searchBox.addEventListener('input', ()=>{
   clearTimeout(searchDebounce);
   searchDebounce = setTimeout(()=>runSearch(searchBox.value), 120);
 });
+document.getElementById('copyPathBtn').onclick = ()=> writeClipboard(meta.filename, 'file path');
 searchBox.addEventListener('keydown', (e)=>{
   const results = document.getElementById('searchResults');
   if(!results.classList.contains('open')) return;
