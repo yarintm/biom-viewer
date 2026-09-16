@@ -3160,16 +3160,6 @@ modeBtns.forEach(b=>b.onclick = ()=>{
   const m = b.dataset.m;
   const rowAxisChanged = rowAxisKey(m)!==rowAxisKey(mode);
   const colAxisChanged = colAxisKey(m)!==colAxisKey(mode);
-  // colsPerPage()/rowsPerPage() aren't fixed per axis -- they depend on the
-  // row-header width, which swings wildly between modes (a taxonomy string
-  // in data mode vs. a short field name in 'col' mode). So even when the
-  // axis's identity space is unchanged (data <-> col both page over the
-  // same sample list), keeping the same page *number* across the switch can
-  // land on a visibly different set of samples once colsPerPage changes.
-  // Anchor on the actual first-visible raw index instead, and re-derive the
-  // page number under the new mode's own colsPerPage()/rowsPerPage().
-  const rowAnchor = rowPage * rowsPerPage();
-  const colAnchor = colPage * colsPerPage();
   if(rowAxisChanged){
     rowPageByAxis[rowAxisKey(mode)] = rowPage;
     selR = null; selPinnedRaw = null; selPinnedField = null;
@@ -3179,16 +3169,15 @@ modeBtns.forEach(b=>b.onclick = ()=>{
     selC = null;
   }
   setMode(m);
-  // Always recompute under the new mode's own fit -- same order
-  // toggleFieldRow already uses for the same reason (rowsPerPage()/
-  // colsPerPage() aren't safe to read until computeFit() has run for m).
-  computeFit();
-  rowPage = rowAxisChanged
-    ? Math.min(rowPageByAxis[rowAxisKey(m)] || 0, maxRowPage())
-    : Math.min(Math.floor(rowAnchor / rowsPerPage()), maxRowPage());
-  colPage = colAxisChanged
-    ? Math.min(colPageByAxis[colAxisKey(m)] || 0, maxColPage())
-    : Math.min(Math.floor(colAnchor / colsPerPage()), maxColPage());
+  if(rowAxisChanged || colAxisChanged){
+    // The field/id count (and thus rowsPerPage()/colsPerPage()) can differ
+    // between axes, so the remembered page needs computeFit() run under the
+    // new mode before it's safe to use -- same order toggleFieldRow already
+    // uses for the same reason.
+    computeFit();
+    if(rowAxisChanged) rowPage = Math.min(rowPageByAxis[rowAxisKey(m)] || 0, maxRowPage());
+    if(colAxisChanged) colPage = Math.min(colPageByAxis[colAxisKey(m)] || 0, maxColPage());
+  }
   render();
 });
 
