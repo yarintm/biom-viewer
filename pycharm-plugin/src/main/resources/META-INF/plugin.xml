@@ -1,0 +1,14 @@
+<idea-plugin>
+    <id>com.biomviewer.plugin</id>
+    <name>BiomViewer</name>
+    <vendor>biom-viewer</vendor>
+    <description>Opens .biom files as an editor tab, backed by the biom-viewer Python backend.</description>
+
+    <depends>com.intellij.modules.platform</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <fileType name="BIOM" implementationClass="com.biomviewer.plugin.BiomFileType"
+                  fieldName="INSTANCE" language="" extensions="biom"/>
+        <fileEditorProvider implementation="com.biomviewer.plugin.BiomFileEditorProvider"/>
+    </extensions>
+</idea-plugin>

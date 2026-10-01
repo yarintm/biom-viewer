@@ -1,0 +1,199 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  :root {
+    --bg: #ffffff; --panel: #f7f8fa; --border: #d7dae0; --text: #1a1a1a;
+    --text-dim: #6b7177; --accent: #2f6fed; --accent-fg: #ffffff;
+    --row-alt: #f3f5f8; --row-hover: #eaf1ff; --error-bg: #fdecec; --error-fg: #a4232a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1e1f22; --panel: #2b2d30; --border: #3b3d41; --text: #e3e3e3;
+      --text-dim: #8a8d91; --accent: #4a8cff; --accent-fg: #ffffff;
+      --row-alt: #25262a; --row-hover: #2a3a52; --error-bg: #3a2323; --error-fg: #ff8a8a;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    height: 100%; margin: 0;
+    font-family: -apple-system, "Segoe UI", sans-serif; font-size: 12.5px;
+    background: var(--bg); color: var(--text);
+  }
+  body { display: flex; flex-direction: column; }
+  .toolbar {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 10px; border-bottom: 1px solid var(--border); flex: none;
+  }
+  .modes { display: inline-flex; border: 1px solid var(--border); border-radius: 5px; overflow: hidden; }
+  .modes button {
+    border: none; background: var(--panel); color: var(--text); padding: 5px 11px;
+    cursor: pointer; font-size: 12px; border-right: 1px solid var(--border);
+  }
+  .modes button:last-child { border-right: none; }
+  .modes button.active { background: var(--accent); color: var(--accent-fg); }
+  .modes button:hover:not(.active) { background: var(--row-hover); }
+  .pager { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; }
+  .pager button {
+    border: 1px solid var(--border); background: var(--panel); color: var(--text);
+    border-radius: 4px; width: 24px; height: 24px; cursor: pointer; font-size: 11px;
+  }
+  .pager button:disabled { opacity: 0.35; cursor: default; }
+  .pager button:hover:not(:disabled) { background: var(--row-hover); }
+  #pageInfo { color: var(--text-dim); font-size: 11.5px; white-space: nowrap; }
+
+  #gridHost { flex: 1; overflow: auto; position: relative; }
+  table { border-collapse: collapse; font-size: 12px; min-width: 100%; }
+  td, th {
+    border: 1px solid var(--border); padding: 4px 8px; white-space: nowrap;
+    text-align: right; font-variant-numeric: tabular-nums;
+  }
+  th { background: var(--panel); text-align: left; font-weight: 600; }
+  thead th { position: sticky; top: 0; z-index: 2; }
+  tbody th { position: sticky; left: 0; z-index: 1; text-align: left; }
+  thead th:first-child { left: 0; z-index: 3; }
+  tbody tr:nth-child(even) td { background: var(--row-alt); }
+  tbody tr:hover td { background: var(--row-hover); }
+
+  .centered { display: flex; align-items: center; justify-content: center; height: 100%; color: var(--text-dim); }
+  .spinner {
+    width: 18px; height: 18px; border-radius: 50%;
+    border: 2px solid var(--border); border-top-color: var(--accent);
+    animation: spin 0.7s linear infinite; margin-right: 8px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .error-box {
+    margin: 14px; padding: 10px 12px; border-radius: 5px;
+    background: var(--error-bg); color: var(--error-fg); font-size: 12px;
+    white-space: pre-wrap;
+  }
+</style>
+</head>
+<body>
+  <div class="toolbar">
+    <div class="modes">
+      <button data-mode="data" class="active">Data</button>
+      <button data-mode="row">Observation metadata</button>
+      <button data-mode="col">Sample metadata</button>
+    </div>
+    <div class="pager">
+      <span id="pageInfo"></span>
+      <button id="prevPage" title="Previous page">&#9664;</button>
+      <button id="nextPage" title="Next page">&#9654;</button>
+    </div>
+  </div>
+  <div id="gridHost"><div class="centered"><div class="spinner"></div>Loading&hellip;</div></div>
+
+<script>
+  const PAGE_SIZE = 8;
+  let meta = null;
+  let mode = "data";
+  let page = 0;
+
+  function request(method, params) {
+    return new Promise((resolve, reject) => {
+      window.biomRequest(JSON.stringify({method: method, params: params || {}}), (raw) => {
+        const resp = JSON.parse(raw);
+        if (resp.ok) resolve(resp.result); else reject(resp.error);
+      }, (err) => reject(err));
+    });
+  }
+
+  function axisLength() {
+    if (mode === "data") return meta.cols;
+    return mode === "row" ? meta.row_ids.length : meta.col_ids.length;
+  }
+
+  function maxPage() {
+    return Math.max(0, Math.ceil(axisLength() / PAGE_SIZE) - 1);
+  }
+
+  function showError(err) {
+    document.getElementById("gridHost").innerHTML =
+      '<div class="error-box">' + String(err).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])) + '</div>';
+  }
+
+  async function renderData() {
+    const c0 = page * PAGE_SIZE;
+    const c1 = Math.min(c0 + PAGE_SIZE, meta.cols);
+    const r1 = Math.min(PAGE_SIZE, meta.rows);
+    const rows = await request("data_window", {r0: 0, r1: r1, c0: c0, c1: c1});
+    let html = "<table><thead><tr><th></th>";
+    for (let c = c0; c < c1; c++) html += "<th>" + meta.col_ids[c] + "</th>";
+    html += "</tr></thead><tbody>";
+    for (let r = 0; r < rows.length; r++) {
+      html += "<tr><th>" + meta.row_ids[r] + "</th>";
+      for (const v of rows[r]) html += "<td>" + v + "</td>";
+      html += "</tr>";
+    }
+    html += "</tbody></table>";
+    document.getElementById("gridHost").innerHTML = html;
+    document.getElementById("pageInfo").textContent =
+      "samples " + (c0 + 1) + "-" + c1 + " / " + meta.cols;
+  }
+
+  function renderMetadata(axis) {
+    const ids = axis === "row" ? meta.row_ids : meta.col_ids;
+    const metaList = axis === "row" ? meta.row_metadata : meta.col_metadata;
+    const c0 = page * PAGE_SIZE;
+    const c1 = Math.min(c0 + PAGE_SIZE, ids.length);
+    const fields = metaList && metaList.length ? Object.keys(metaList[0]) : [];
+    let html = "<table><thead><tr><th></th>";
+    for (let c = c0; c < c1; c++) html += "<th>" + ids[c] + "</th>";
+    html += "</tr></thead><tbody>";
+    for (const field of fields) {
+      html += "<tr><th>" + field + "</th>";
+      for (let c = c0; c < c1; c++) {
+        const row = metaList[c] || {};
+        const v = row[field];
+        html += "<td>" + (v === undefined || v === null ? "" : v) + "</td>";
+      }
+      html += "</tr>";
+    }
+    html += "</tbody></table>";
+    document.getElementById("gridHost").innerHTML = html;
+    document.getElementById("pageInfo").textContent =
+      (axis === "row" ? "observations " : "samples ") + (c0 + 1) + "-" + c1 + " / " + ids.length;
+  }
+
+  function updatePagerState() {
+    document.getElementById("prevPage").disabled = page <= 0;
+    document.getElementById("nextPage").disabled = page >= maxPage();
+  }
+
+  function render() {
+    page = Math.min(page, maxPage());
+    updatePagerState();
+    const renderFn = mode === "data" ? renderData : () => renderMetadata(mode);
+    Promise.resolve(renderFn()).catch(showError);
+  }
+
+  document.querySelectorAll("[data-mode]").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      if (btn.classList.contains("active")) return;
+      document.querySelector(".modes button.active").classList.remove("active");
+      btn.classList.add("active");
+      mode = btn.dataset.mode;
+      page = 0;
+      render();
+    });
+  });
+  document.getElementById("prevPage").addEventListener("click", function () { page = Math.max(0, page - 1); render(); });
+  document.getElementById("nextPage").addEventListener("click", function () { page = Math.min(maxPage(), page + 1); render(); });
+
+  function loadMeta() {
+    request("meta", {}).then(function (m) { meta = m; render(); }).catch(showError);
+  }
+
+  // window.biomRequest is injected by the Kotlin side's onLoadEnd handler,
+  // which runs after this script -- waiting for its ready event (instead of
+  // calling biomRequest here directly) avoids a "not a function" race.
+  if (typeof window.biomRequest === "function") {
+    loadMeta();
+  } else {
+    window.addEventListener("biomBridgeReady", loadMeta, { once: true });
+  }
+</script>
+</body>
+</html>
