@@ -154,15 +154,23 @@ STYLE = """
      just "No matches", and there is nothing to keep open then -- the pin
      was floating over that one line of text. .stabs exists only when there
      are results. */
-  #searchWrap:has(#searchResults.open .stabs) #searchPin{position:absolute;z-index:21;
-             top:calc(100% + 11px);right:8px;display:flex;align-items:center;gap:4px;
+  #searchWrap:has(#searchResults.open .stabs) #searchPin{position:fixed;z-index:21;
+             top:calc(var(--hdr-h,52px) + 5px);right:8px;display:flex;align-items:center;gap:4px;
              padding:3px 8px;font-size:11.5px;line-height:1.4;color:var(--dim);
              background:none;border:1px solid transparent}
   #searchWrap #searchPin:hover{color:var(--fg);background:var(--hl)}
   #searchWrap #searchPin.on{color:var(--fg);background:var(--hl);border-color:var(--sel-outline)}
-  #searchResults{position:absolute;top:calc(100% + 6px);right:0;width:420px;max-height:60vh;overflow-y:auto;
-             background:var(--panel-raised);border:1px solid var(--border);border-radius:var(--radius-md);
-             box-shadow:var(--shadow-md);display:none;z-index:20}
+  /* Docks against the right edge from under the header to the window floor,
+     mirroring #viewsPopover on the left, rather than the 60vh dropdown this
+     used to be. Search results are a list you work through while the pin
+     keeps them open -- the dropdown shape said "pick one and I'll vanish",
+     and capping at 60vh wasted the bottom third of a tall window.
+     --hdr-h is published by the ResizeObserver in web_script.py; the 52px
+     fallback is the header's height at default font size, so a frame
+     rendered before the observer's first callback lands correctly anyway. */
+  #searchResults{position:fixed;top:var(--hdr-h,52px);right:0;bottom:0;width:420px;overflow-y:auto;
+             background:var(--panel-raised);border-left:1px solid var(--border);
+             box-shadow:var(--shadow-lg);display:none;z-index:20}
   #searchResults.open{display:block}
   /* Pinned state used to be an accent outline around the whole panel --
      the same 2px accent box the grid uses for "this is the selected cell",
