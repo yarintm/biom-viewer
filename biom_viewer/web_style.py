@@ -157,12 +157,20 @@ STYLE = """
      just "No matches", and there is nothing to keep open then -- the pin
      was floating over that one line of text. .stabs exists only when there
      are results. */
+  /* A footer bar, not a chip floating over the tab strip. The old placement
+     reserved room with padding-right on .stabs, but .stabs scrolls
+     horizontally -- padding only protects the *end* of the scroll content,
+     so any tab scrolled straight under the pin and collided with its label
+     ("Sample fields 18" under "Keep open"). Docking it to the panel's floor
+     removes the overlap case entirely rather than reserving against it,
+     which is affordable now the panel is full-height. */
   #searchWrap:has(#searchResults.open .stabs) #searchPin{position:fixed;z-index:21;
-             top:calc(var(--hdr-h,52px) + 5px);right:8px;display:flex;align-items:center;gap:4px;
-             padding:3px 8px;font-size:11.5px;line-height:1.4;color:var(--dim);
-             background:none;border:1px solid transparent}
+             bottom:0;right:0;width:420px;box-sizing:border-box;
+             display:flex;align-items:center;justify-content:center;gap:4px;
+             padding:7px 8px;font-size:11.5px;line-height:1.4;color:var(--dim);
+             background:var(--panel-raised);border:none;border-top:1px solid var(--border)}
   #searchWrap #searchPin:hover{color:var(--fg);background:var(--hl)}
-  #searchWrap #searchPin.on{color:var(--fg);background:var(--hl);border-color:var(--sel-outline)}
+  #searchWrap #searchPin.on{color:var(--fg);background:var(--hl);border-top-color:var(--sel-outline)}
   /* Docks against the right edge from under the header to the window floor,
      mirroring #viewsPopover on the left, rather than the 60vh dropdown this
      used to be. Search results are a list you work through while the pin
@@ -171,15 +179,17 @@ STYLE = """
      --hdr-h is published by the ResizeObserver in web_script.py; the 52px
      fallback is the header's height at default font size, so a frame
      rendered before the observer's first callback lands correctly anyway. */
+  /* padding-bottom clears the pin footer so the last result isn't parked
+     underneath it at the end of the scroll. */
   #searchResults{position:fixed;top:var(--hdr-h,52px);right:0;bottom:0;width:420px;overflow-y:auto;
-             background:var(--panel-raised);border-left:1px solid var(--border);
+             padding-bottom:34px;background:var(--panel-raised);border-left:1px solid var(--border);
              box-shadow:var(--shadow-lg);display:none;z-index:20}
   #searchResults.open{display:block}
   /* Pinned state used to be an accent outline around the whole panel --
      the same 2px accent box the grid uses for "this is the selected cell",
      meaning two unrelated things in one screen. The toggle's own on-state
      carries it now. */
-  .stabs{position:sticky;top:0;z-index:1;display:flex;gap:2px;padding:5px 96px 5px 6px;overflow-x:auto;
+  .stabs{position:sticky;top:0;z-index:1;display:flex;gap:2px;padding:5px 6px;overflow-x:auto;
              background:var(--panel-raised);border-bottom:1px solid var(--border)}
   .stabs::-webkit-scrollbar{display:none}
   .stab{flex:0 0 auto;padding:3px 8px;border-radius:var(--radius-sm);font-size:11.5px;color:var(--dim);
@@ -652,6 +662,8 @@ STYLE = """
        so at the app's own minimum window size it squeezed the document
        title down to a dozen characters to keep room it wasn't using. */
     #searchBox{width:130px}
-    #searchResults{width:min(420px,90vw)}
+    /* The pin footer is docked to the panel's floor, so it has to narrow
+       with it or it would jut out past the panel's left edge. */
+    #searchResults,#searchWrap:has(#searchResults.open .stabs) #searchPin{width:min(420px,90vw)}
   }
 """
