@@ -3140,6 +3140,16 @@ modeBtns.forEach(b=>b.onclick = ()=>{
   render();
 });
 
+// #searchResults docks from under the header to the window floor, so it needs
+// the header's height as a viewport offset -- CSS can't read one element's
+// box into another's `top`. Observed rather than measured once: #info reflows
+// when the path truncates, when the mode tag appears, and at the 820px
+// breakpoint. ResizeObserver fires immediately on observe(), so this doubles
+// as the initial measurement.
+new ResizeObserver(([e]) =>
+  document.documentElement.style.setProperty('--hdr-h', e.target.offsetHeight + 'px')
+).observe(document.getElementById('info'));
+
 const searchBox = document.getElementById('searchBox');
 let searchDebounce=null;
 // Selecting a result blurs the box and closes the panel (jumpTo) without
