@@ -849,7 +849,7 @@ function parseFieldQuery(q){
   if(!m) return null;
   const field = m[1].trim();
   const value = m[2].trim();
-  if(!field || !value) return null;
+  if(!field) return null;
   return {field, value};
 }
 
@@ -2524,6 +2524,7 @@ function openViewRowContextMenu(e, name){
     `<div class="ctx-sep"></div>` +
     `<button class="ctx-item" data-act="delete">🗑 Delete</button>`;
   document.body.appendChild(menu);
+  clampCtxMenuToViewport(menu);
   wireCtxMenuOverViewsPanel(menu);
   // stopPropagation matters here (not just in openViewRowContextMenu's
   // sibling functions): the button's own click keeps bubbling to document
@@ -2556,6 +2557,7 @@ function openMoveToFolderMenu(e, view){
   menu.innerHTML = folderItems + noFolderItem + `<div class="ctx-sep"></div>` +
     `<button class="ctx-item" data-act="new">📁 New folder…</button>`;
   document.body.appendChild(menu);
+  clampCtxMenuToViewport(menu);
   wireCtxMenuOverViewsPanel(menu);
   menu.querySelectorAll('[data-folder]').forEach(btn=>{
     btn.onclick = (ev)=>{ ev.stopPropagation(); closeContextMenu(); moveViewToFolder(view.name, btn.dataset.folder || null); };
@@ -2577,6 +2579,7 @@ function openFolderContextMenu(e, name){
     `<div class="ctx-sep"></div>` +
     `<button class="ctx-item" data-act="delete">🗑 Delete folder</button>`;
   document.body.appendChild(menu);
+  clampCtxMenuToViewport(menu);
   wireCtxMenuOverViewsPanel(menu);
   menu.querySelector('[data-act="rename"]').onclick = (ev)=>{
     ev.stopPropagation();
@@ -2603,6 +2606,7 @@ function openEmptySpaceContextMenu(e){
   menu.style.top = e.clientY + 'px';
   menu.innerHTML = `<button class="ctx-item" data-act="new">📁 New folder</button>`;
   document.body.appendChild(menu);
+  clampCtxMenuToViewport(menu);
   wireCtxMenuOverViewsPanel(menu);
   menu.querySelector('[data-act="new"]').onclick = (ev)=>{
     ev.stopPropagation();
@@ -2796,6 +2800,19 @@ function closeContextMenu(){
 // mouseleave on the popover, which arms its close-on-hover-out timer. Without
 // this, right-clicking a view then moving toward "Rename" closed the whole
 // panel out from under the menu before the click landed.
+// Menus are placed at the cursor with no idea yet how tall/wide they'll
+// render, so a right-click near the bottom or right edge (e.g. the last rows
+// of a tall field list) pushed the menu partly off-screen with no way to
+// reach the clipped options. Nudge back onto the viewport once the real size
+// is known -- position:fixed makes clientWidth/Height the right frame.
+function clampCtxMenuToViewport(menu){
+  const r = menu.getBoundingClientRect();
+  const overflowX = r.right - window.innerWidth;
+  const overflowY = r.bottom - window.innerHeight;
+  if(overflowX > 0) menu.style.left = Math.max(0, r.left - overflowX) + 'px';
+  if(overflowY > 0) menu.style.top = Math.max(0, r.top - overflowY) + 'px';
+}
+
 function wireCtxMenuOverViewsPanel(menu){
   menu.addEventListener('mouseenter', ()=> clearTimeout(viewsHideTimer));
   menu.addEventListener('mouseleave', ()=>{
@@ -2864,6 +2881,7 @@ document.addEventListener('contextmenu', (e)=>{
   }
   menu.innerHTML = html;
   document.body.appendChild(menu);
+  clampCtxMenuToViewport(menu);
   headerItems.forEach((it, i)=>{
     if(it.sep) return;
     menu.querySelector(`[data-hi="${i}"]`).onclick = ()=>{ closeContextMenu(); it.onClick(); };
@@ -2877,12 +2895,20 @@ document.addEventListener('contextmenu', (e)=>{
 });
 document.addEventListener('click', closeContextMenu);
 
+// U+2212 so a negative bound doesn't read as part of the word "between".
+function fmtBound(v){ return fmtNum(v).replace('-', '−'); }
+
 function miniHist(histogram){
   if(!histogram.length) return '';
   const max = Math.max(...histogram.map(b=>b.count), 1);
-  const bars = histogram.map(b =>
-    `<span class="bar" style="height:${Math.max(4, b.count/max*100)}%" title="${fmtNum(b.lo)}–${fmtNum(b.hi)}: ${b.count}"></span>`
-  ).join('');
+  // Percent is against the binned total, not s.n -- the histogram's own
+  // denominator, so the bars' shares add to 100% whatever the caller counted.
+  const total = histogram.reduce((a, b) => a + b.count, 0);
+  const bars = histogram.map(b => {
+    const pct = total ? ` (${Math.round(b.count/total*100)}%)` : '';
+    const title = `${b.count} ${b.count===1?'value':'values'} between ${fmtBound(b.lo)} and ${fmtBound(b.hi)}${pct}`;
+    return `<span class="bar" style="height:${Math.max(4, b.count/max*100)}%" title="${title}"></span>`;
+  }).join('');
   return `<div class="stat-bars">${bars}</div>`;
 }
 
