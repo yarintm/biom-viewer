@@ -38,6 +38,10 @@ STYLE = """
        .cell-expanded-row) -- perceived colour intensity scales with area,
        so a tint tuned for a 20px row reads as a solid block at 130px. */
     --hl-soft:light-dark(#eef9f3,#1c3529);
+    /* One source of truth for the search panel's width: the panel, its pin
+       footer, and the width the content below the header gives up all read
+       this, so they can't drift apart. */
+    --search-w:420px;
     --fs:11px;
     --radius-sm:6px; --radius-md:8px; --radius-lg:12px;
     --shadow-sm:light-dark(0 1px 2px rgba(0,0,0,.06),0 1px 2px rgba(0,0,0,.4));
@@ -165,7 +169,7 @@ STYLE = """
      removes the overlap case entirely rather than reserving against it,
      which is affordable now the panel is full-height. */
   #searchWrap:has(#searchResults.open .stabs) #searchPin{position:fixed;z-index:21;
-             bottom:0;right:0;width:420px;box-sizing:border-box;
+             bottom:0;right:0;width:var(--search-w);box-sizing:border-box;
              display:flex;align-items:center;justify-content:center;gap:4px;
              padding:7px 8px;font-size:11.5px;line-height:1.4;color:var(--dim);
              background:var(--panel-raised);border:none;border-top:1px solid var(--border)}
@@ -181,10 +185,20 @@ STYLE = """
      rendered before the observer's first callback lands correctly anyway. */
   /* padding-bottom clears the pin footer so the last result isn't parked
      underneath it at the end of the scroll. */
-  #searchResults{position:fixed;top:var(--hdr-h,52px);right:0;bottom:0;width:420px;overflow-y:auto;
+  #searchResults{position:fixed;top:var(--hdr-h,52px);right:0;bottom:0;width:var(--search-w);overflow-y:auto;
              padding-bottom:34px;background:var(--panel-raised);border-left:1px solid var(--border);
              box-shadow:var(--shadow-lg);display:none;z-index:20}
   #searchResults.open{display:block}
+  /* The content below the header gives up the panel's width instead of being
+     covered by it -- an overlaid panel hid the rightmost samples, which is
+     exactly what you're looking at while searching. #info deliberately keeps
+     its full width: the panel starts below it, and shrinking it would shift
+     the search box sideways the instant results appeared, out from under the
+     cursor still typing in it. Width changes here don't fire a window resize
+     event, so web_script.py observes #body to recount the visible columns. */
+  body:has(#searchResults.open) #axisChips,
+  body:has(#searchResults.open) #body{padding-right:calc(var(--search-w) + 14px)}
+  body:has(#searchResults.open) #selectedWrap{margin-right:calc(var(--search-w) + 14px)}
   /* Pinned state used to be an accent outline around the whole panel --
      the same 2px accent box the grid uses for "this is the selected cell",
      meaning two unrelated things in one screen. The toggle's own on-state
@@ -662,8 +676,8 @@ STYLE = """
        so at the app's own minimum window size it squeezed the document
        title down to a dozen characters to keep room it wasn't using. */
     #searchBox{width:130px}
-    /* The pin footer is docked to the panel's floor, so it has to narrow
-       with it or it would jut out past the panel's left edge. */
-    #searchResults,#searchWrap:has(#searchResults.open .stabs) #searchPin{width:min(420px,90vw)}
+    /* Narrowing the one variable narrows the panel, its pin footer, and the
+       width the grid gives up, all together. */
+    :root{--search-w:min(420px,90vw)}
   }
 """

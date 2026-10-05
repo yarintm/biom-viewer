@@ -3310,20 +3310,27 @@ document.getElementById('colStart').onclick = ()=>{ colPage = 0; render(); };
 document.getElementById('colEnd').onclick = ()=>{ colPage = maxColPage(); render(); };
 
 let resizeT=null;
-window.addEventListener('resize', ()=>{
+// Resizing changes rowsPerPage()/colsPerPage(), but not which page you
+// were on -- clamp against the new fit instead of jumping back to page 1
+// every time the window changes size, the same way every other spot that
+// recomputes fit (toggleFieldRowPinned etc.) already clamps rather than
+// resets.
+function refitSoon(){
   clearTimeout(resizeT);
-  // Resizing changes rowsPerPage()/colsPerPage(), but not which page you
-  // were on -- clamp against the new fit instead of jumping back to page 1
-  // every time the window changes size, the same way every other spot that
-  // recomputes fit (toggleFieldRowPinned etc.) already clamps rather than
-  // resets.
   resizeT = setTimeout(()=>{
     computeFit();
     rowPage = Math.min(rowPage, maxRowPage());
     colPage = Math.min(colPage, maxColPage());
     render();
   }, 150);
-});
+}
+window.addEventListener('resize', refitSoon);
+// Opening the search panel narrows #body (see the body:has(...) rules in
+// web_style.py) without the window changing size, so no resize event fires
+// and the grid would keep rendering the old column count under the panel.
+// Observing #body catches that and every other cause of a width change --
+// including the window resize above -- in one place.
+new ResizeObserver(refitSoon).observe(document.getElementById('body'));
 
 const systemDark = window.matchMedia('(prefers-color-scheme: dark)');
 function toggleTheme(){
