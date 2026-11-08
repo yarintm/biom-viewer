@@ -41,8 +41,12 @@ trap 'rm -rf "$TMP"' EXIT
 cat > "$TMP/launcher.applescript" <<'EOF'
 on open theFiles
 	set f to POSIX path of (item 1 of theFiles)
-	set enginePath to (path to me as text) & "Contents:Resources:BiomViewerEngine.app:Contents:MacOS:BiomViewer"
-	do shell script "'" & POSIX path of enginePath & "' " & quoted form of f & " >> /tmp/biom-viewer.log 2>&1 &"
+	set enginePath to (path to me as text) & "Contents:Resources:BiomViewerEngine.app"
+	-- Launch via LaunchServices, not as a child of this applet: exec'd
+	-- directly from here, the engine's WKWebView stays blank (verified on
+	-- macOS 27). -n so a second file still spawns a process that hands off
+	-- to the running instance over the IPC socket.
+	do shell script "open -n -a " & quoted form of POSIX path of enginePath & " --args " & quoted form of f
 end open
 EOF
 
@@ -60,6 +64,11 @@ PLIST="$OUT/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleDocumentTypes:0:CFBundleTypeExtensions:0 biom" "$PLIST"
 /usr/libexec/PlistBuddy -c "Add :CFBundleDocumentTypes:0:CFBundleTypeName string 'BIOM File'" "$PLIST" 2>/dev/null || true
 
+# bundle id + a real .biom UTI, without which macOS will not let the user
+# pick this app as the default handler -- see scripts/_bundle_identity.sh
+source "$(dirname "$0")/_bundle_identity.sh"
+stamp_bundle_identity "$OUT"
+
 cp scripts/icon.icns "$OUT/Contents/Resources/droplet.icns"
 # osacompile also bakes its default icon into a compiled asset catalog,
 # which macOS's icon resolver prefers over the loose .icns above.
@@ -68,4 +77,5 @@ touch "$OUT"
 
 echo ""
 echo "Built self-contained $OUT ($(du -sh "$OUT" | cut -f1))"
-echo "Drag it to /Applications, then double-click any .biom file."
+echo "Drag it to /Applications, then run:  scripts/set_default_handler.sh"
+echo "(or just double-click a .biom file — the app is now selectable as the default)"

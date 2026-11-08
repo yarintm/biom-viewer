@@ -12,3 +12,9 @@ BiomViewer.app/
 build_output/
 .build-venv/
 *.spec
+
+# agent worktrees: build artifacts, and registering their .app copies with
+# Launch Services is what produced duplicate "Open With" entries
+.claude/worktrees/
+# a clone of github.com/zerebos/ghostty-config that landed here by accident
+ghostty-config/
